@@ -28,7 +28,7 @@ HEADERS = {
     ),
     "Accept": "*/*",
     "Accept-Language": "ko-KR,ko;q=0.9",
-    "Referer": "https://1x2.7mkr.com/"
+    "Referer": "https://1x2.7mkr.com/",
 }
 
 
@@ -41,7 +41,6 @@ SESSION.headers.update(HEADERS)
 # =========================================================
 
 def _date_string(target_date):
-
     if isinstance(target_date, date):
         return target_date.strftime("%Y-%m-%d")
 
@@ -49,11 +48,10 @@ def _date_string(target_date):
 
 
 def _request(url, params=None):
-
     response = SESSION.get(
         url,
         params=params,
-        timeout=30
+        timeout=30,
     )
 
     response.raise_for_status()
@@ -70,15 +68,11 @@ def _request(url, params=None):
 # DOWNLOAD
 # =========================================================
 
-def download_result_page(
-    target_date,
-    cid=""
-):
-
+def download_result_page(target_date, cid=""):
     dt = _date_string(target_date)
 
     params = {
-        "dt": dt
+        "dt": dt,
     }
 
     if cid:
@@ -86,15 +80,11 @@ def download_result_page(
 
     return _request(
         BASE_URL,
-        params=params
+        params=params,
     )
 
 
-def download_day(
-    target_date,
-    cid=""
-):
-
+def download_day(target_date, cid=""):
     dt = _date_string(target_date)
 
     filename = (
@@ -112,7 +102,6 @@ def download_day(
     text = _request(url)
 
     if not text.strip():
-
         raise ValueError(
             "7M 서버가 빈 데이터를 반환했습니다."
         )
@@ -125,7 +114,6 @@ def download_day(
 # =========================================================
 
 def _clean_js(text):
-
     text = text.lstrip("\ufeff")
 
     # HTML 응답이 실수로 들어온 경우
@@ -134,26 +122,26 @@ def _clean_js(text):
         scripts = re.findall(
             r"<script[^>]*>(.*?)</script>",
             text,
-            flags=re.I | re.S
+            flags=re.I | re.S,
         )
 
         if scripts:
             text = "\n".join(scripts)
 
-    # block comment
+    # block comment 제거
     text = re.sub(
         r"/\*.*?\*/",
         "",
         text,
-        flags=re.S
+        flags=re.S,
     )
 
-    # line comment
+    # line comment 제거
     text = re.sub(
         r"^\s*//.*?$",
         "",
         text,
-        flags=re.MULTILINE
+        flags=re.MULTILINE,
     )
 
     return text.strip()
@@ -164,23 +152,21 @@ def _clean_js(text):
 # =========================================================
 
 def _extract_json_objects(text):
-
     objects = []
 
     decoder = json.JSONDecoder()
 
     positions = [
-        m.start()
-        for m in re.finditer(
+        match.start()
+        for match in re.finditer(
             r"[\[{]",
-            text
+            text,
         )
     ]
 
     for start in positions:
 
         try:
-
             obj, _ = decoder.raw_decode(
                 text[start:]
             )
@@ -188,35 +174,35 @@ def _extract_json_objects(text):
             objects.append(obj)
 
         except Exception:
-
             continue
 
     return objects
 
 
 def _js_to_json_candidate(text):
-
     candidate = text.strip()
 
     # JS object key -> JSON key
     candidate = re.sub(
         r"([{,]\s*)([A-Za-z_$][\w$]*)\s*:",
         r'\1"\2":',
-        candidate
+        candidate,
     )
 
     # single quote -> double quote
     candidate = re.sub(
         r"'([^'\\]*(?:\\.[^'\\]*)*)'",
-        lambda m:
-            json.dumps(m.group(1)),
-        candidate
+        lambda match: json.dumps(
+            match.group(1)
+        ),
+        candidate,
     )
 
+    # trailing comma 제거
     candidate = re.sub(
         r",\s*([}\]])",
         r"\1",
-        candidate
+        candidate,
     )
 
     return candidate
@@ -233,13 +219,11 @@ def _flatten(obj):
         yield obj
 
         for value in obj.values():
-
             yield from _flatten(value)
 
     elif isinstance(obj, list):
 
         for value in obj:
-
             yield from _flatten(value)
 
 
@@ -253,18 +237,14 @@ def _number(value):
         return None
 
     try:
-
         text = str(value).strip()
 
         text = text.replace(",", "")
-
-        # 배당에 붙은 특수문자 제거
         text = text.replace("배", "")
 
         return float(text)
 
     except Exception:
-
         return None
 
 
@@ -281,7 +261,7 @@ def _find_score(item):
         "fulltime",
         "final",
         "sc",
-        "res"
+        "res",
     ]
 
     for key in keys:
@@ -292,20 +272,17 @@ def _find_score(item):
 
             match = re.search(
                 r"(\d+)\s*[-:]\s*(\d+)",
-                value
+                value,
             )
 
             if match:
-
                 return (
                     int(match.group(1)),
-                    int(match.group(2))
+                    int(match.group(2)),
                 )
-
 
     home_score = None
     away_score = None
-
 
     for key in [
         "home_score",
@@ -313,7 +290,7 @@ def _find_score(item):
         "homeScore",
         "hscore",
         "hs",
-        "hg"
+        "hg",
     ]:
 
         if key in item:
@@ -324,14 +301,13 @@ def _find_score(item):
 
             break
 
-
     for key in [
         "away_score",
         "awayscore",
         "awayScore",
         "ascore",
         "as",
-        "ag"
+        "ag",
     ]:
 
         if key in item:
@@ -342,17 +318,14 @@ def _find_score(item):
 
             break
 
-
     if (
         home_score is not None
         and away_score is not None
     ):
-
         return (
             int(home_score),
-            int(away_score)
+            int(away_score),
         )
-
 
     return None
 
@@ -362,7 +335,6 @@ def _find_score(item):
 # =========================================================
 
 def _valid_odd(value):
-
     value = _number(value)
 
     return (
@@ -374,7 +346,6 @@ def _valid_odd(value):
 def _find_odds(item):
 
     groups = [
-
         (
             [
                 "home_odds",
@@ -385,7 +356,7 @@ def _find_odds(item):
                 "odds1",
                 "odd1",
                 "hodd",
-                "h"
+                "h",
             ],
             [
                 "draw_odds",
@@ -396,7 +367,7 @@ def _find_odds(item):
                 "odds2",
                 "odd2",
                 "dodd",
-                "d"
+                "d",
             ],
             [
                 "away_odds",
@@ -407,11 +378,10 @@ def _find_odds(item):
                 "odds3",
                 "odd3",
                 "aodd",
-                "a"
-            ]
+                "a",
+            ],
         )
     ]
-
 
     for home_keys, draw_keys, away_keys in groups:
 
@@ -420,7 +390,7 @@ def _find_odds(item):
         for keys in (
             home_keys,
             draw_keys,
-            away_keys
+            away_keys,
         ):
 
             found = None
@@ -432,7 +402,6 @@ def _find_odds(item):
                     if _valid_odd(
                         item[key]
                     ):
-
                         found = _number(
                             item[key]
                         )
@@ -441,23 +410,19 @@ def _find_odds(item):
 
             values.append(found)
 
-
         if all(
             value is not None
             for value in values
         ):
-
             return tuple(values)
 
-
     # 배열형
-    for key, value in item.items():
+    for value in item.values():
 
         if not isinstance(
             value,
-            (list, tuple)
+            (list, tuple),
         ):
-
             continue
 
         nums = []
@@ -465,20 +430,16 @@ def _find_odds(item):
         for x in value:
 
             if _valid_odd(x):
-
                 nums.append(
                     _number(x)
                 )
 
-
         if len(nums) >= 3:
-
             return tuple(
                 nums[:3]
             )
 
-
-    # 문자열 안에 3개 배당이 들어있는 경우
+    # 문자열 안에 3개 배당이 있는 경우
     for value in item.values():
 
         if not isinstance(value, str):
@@ -486,7 +447,7 @@ def _find_odds(item):
 
         nums = re.findall(
             r"\b\d+(?:\.\d{1,4})?\b",
-            value
+            value,
         )
 
         valid = []
@@ -494,15 +455,14 @@ def _find_odds(item):
         for x in nums:
 
             if _valid_odd(x):
-
                 valid.append(
                     float(x)
                 )
 
         if len(valid) >= 3:
-
-            return tuple(valid[:3])
-
+            return tuple(
+                valid[:3]
+            )
 
     return None
 
@@ -511,10 +471,7 @@ def _find_odds(item):
 # TEAM
 # =========================================================
 
-def _find_team(
-    item,
-    home=True
-):
+def _find_team(item, home=True):
 
     if home:
 
@@ -526,7 +483,7 @@ def _find_team(
             "team_1",
             "hteam",
             "homeName",
-            "home_name"
+            "home_name",
         ]
 
     else:
@@ -539,9 +496,8 @@ def _find_team(
             "team_2",
             "ateam",
             "awayName",
-            "away_name"
+            "away_name",
         ]
-
 
     for key in keys:
 
@@ -551,9 +507,7 @@ def _find_team(
             isinstance(value, str)
             and value.strip()
         ):
-
             return value.strip()
-
 
     return ""
 
@@ -572,7 +526,6 @@ def extract_matches(js):
 
     seen = set()
 
-
     for obj in objects:
 
         for item in _flatten(obj):
@@ -580,11 +533,8 @@ def extract_matches(js):
             if not isinstance(item, dict):
                 continue
 
-
             score = _find_score(item)
-
             odds = _find_odds(item)
-
 
             if score is None:
                 continue
@@ -592,11 +542,9 @@ def extract_matches(js):
             if odds is None:
                 continue
 
-
             home_score, away_score = score
 
             home_odds, draw_odds, away_odds = odds
-
 
             if home_score > away_score:
                 result = "H"
@@ -607,17 +555,15 @@ def extract_matches(js):
             else:
                 result = "D"
 
-
             home_team = _find_team(
                 item,
-                True
+                True,
             )
 
             away_team = _find_team(
                 item,
-                False
+                False,
             )
-
 
             key = (
                 home_team,
@@ -626,61 +572,42 @@ def extract_matches(js):
                 away_score,
                 round(home_odds, 4),
                 round(draw_odds, 4),
-                round(away_odds, 4)
+                round(away_odds, 4),
             )
-
 
             if key in seen:
                 continue
 
             seen.add(key)
 
-
             results.append({
+                "home_team": home_team,
+                "away_team": away_team,
 
-                "home_team":
-                    home_team,
+                "home_score": home_score,
+                "away_score": away_score,
 
-                "away_team":
-                    away_team,
+                "home_odds": home_odds,
+                "draw_odds": draw_odds,
+                "away_odds": away_odds,
 
-                "home_score":
-                    home_score,
+                "result": result,
 
-                "away_score":
-                    away_score,
+                "home_probability": round(
+                    100 / home_odds,
+                    4,
+                ),
 
-                "home_odds":
-                    home_odds,
+                "draw_probability": round(
+                    100 / draw_odds,
+                    4,
+                ),
 
-                "draw_odds":
-                    draw_odds,
-
-                "away_odds":
-                    away_odds,
-
-                "result":
-                    result,
-
-                "home_probability":
-                    round(
-                        100 / home_odds,
-                        4
-                    ),
-
-                "draw_probability":
-                    round(
-                        100 / draw_odds,
-                        4
-                    ),
-
-                "away_probability":
-                    round(
-                        100 / away_odds,
-                        4
-                    )
+                "away_probability": round(
+                    100 / away_odds,
+                    4,
+                ),
             })
-
 
     return results
 
@@ -689,59 +616,46 @@ def extract_matches(js):
 # SAVE DAY
 # =========================================================
 
-def collect_day(
-    target_date,
-    cid=""
-):
+def collect_day(target_date, cid=""):
 
     try:
 
         js = download_day(
             target_date,
-            cid
+            cid,
         )
 
         rows = extract_matches(js)
 
         saved = 0
 
-
         for row in rows:
 
             match_key = "|".join([
-
                 _date_string(target_date),
 
                 row["home_team"],
-
                 row["away_team"],
 
                 str(row["home_score"]),
-
                 str(row["away_score"]),
 
                 f"{row['home_odds']:.4f}",
-
                 f"{row['draw_odds']:.4f}",
-
                 f"{row['away_odds']:.4f}",
 
-                row["result"]
+                row["result"],
             ])
 
-
             value = database.save_match({
-
-                "match_key":
-                    match_key,
+                "match_key": match_key,
 
                 "match_date":
                     _date_string(
                         target_date
                     ),
 
-                "league":
-                    "",
+                "league": "",
 
                 "home_team":
                     row["home_team"],
@@ -776,29 +690,24 @@ def collect_day(
                 "away_probability":
                     row["away_probability"],
 
-                "source":
-                    "7M"
+                "source": "7M",
             })
 
-
             saved += int(value or 0)
-
 
         database.save_collection_day(
             target_date,
             "success",
             len(rows),
-            saved
+            saved,
         )
-
 
         return {
             "success": True,
             "found": len(rows),
             "saved": saved,
-            "error": None
+            "error": None,
         }
-
 
     except Exception as error:
 
@@ -807,7 +716,7 @@ def collect_day(
             "failed",
             0,
             0,
-            str(error)
+            str(error),
         )
 
         raise
@@ -817,28 +726,23 @@ def collect_day(
 # DIAGNOSIS
 # =========================================================
 
-def diagnose(
-    target_date,
-    cid=""
-):
+def diagnose(target_date, cid=""):
 
     try:
 
         html = download_result_page(
             target_date,
-            cid
+            cid,
         )
 
         js = download_day(
             target_date,
-            cid
+            cid,
         )
 
         rows = extract_matches(js)
 
-
         return {
-
             "status": 200,
 
             "size":
@@ -860,38 +764,27 @@ def diagnose(
                 html[:10000],
 
             "js":
-                js[:30000]
+                js[:30000],
         }
-
 
     except Exception as error:
 
         return {
+            "status": 0,
 
-            "status":
-                0,
+            "size": 0,
 
-            "size":
-                0,
+            "html_size": 0,
 
-            "html_size":
-                0,
+            "found": 0,
 
-            "found":
-                0,
+            "has_result": False,
 
-            "has_result":
-                False,
+            "has_compare": False,
 
-            "has_compare":
-                False,
+            "html": "",
 
-            "html":
-                "",
+            "js": "",
 
-            "js":
-                "",
-
-            "error":
-                str(error)
-            }
+            "error": str(error),
+        }
