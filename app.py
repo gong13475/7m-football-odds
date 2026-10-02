@@ -1,7 +1,7 @@
 import re
 import streamlit as st
 
-from datetime import date, timedelta
+from datetime import date
 
 import database
 import collector
@@ -9,10 +9,6 @@ import analyzer
 
 from worker import CollectorWorker
 
-
-# =========================================================
-# 설정
-# =========================================================
 
 st.set_page_config(
     page_title="7M 축구 최종배당 분석기",
@@ -25,39 +21,29 @@ database.init_db()
 
 
 # =========================================================
-# 세션
+# SESSION
 # =========================================================
 
 if "worker" not in st.session_state:
-
     st.session_state.worker = None
 
-
 if "analysis_result" not in st.session_state:
-
     st.session_state.analysis_result = None
 
 
-if "show_logs" not in st.session_state:
-
-    st.session_state.show_logs = False
-
-
 # =========================================================
-# 제목
+# TITLE
 # =========================================================
 
-st.title(
-    "⚽ 7M 축구 최종배당 수집 · 분석기"
-)
+st.title("⚽ 7M 축구 최종배당 수집 · 분석기")
 
 st.caption(
-    "7M 데이터 전용 / 최종배당 / 동일배당 분석"
+    "7M 데이터 전용 / 1X2 최종배당 / 동일배당 과거결과 분석"
 )
 
 
 # =========================================================
-# DB 현황
+# DB STATUS
 # =========================================================
 
 c1, c2, c3, c4 = st.columns(4)
@@ -77,16 +63,11 @@ c3.metric(
     "7M"
 )
 
+worker = st.session_state.worker
+
 c4.metric(
     "현재 상태",
-    (
-        "수집 중"
-        if (
-            st.session_state.worker
-            and st.session_state.worker.running
-        )
-        else "대기"
-    )
+    "수집 중" if worker and worker.running else "대기"
 )
 
 
@@ -94,24 +75,20 @@ st.divider()
 
 
 # =========================================================
-# 날짜
+# COLLECTION DATE
 # =========================================================
 
-st.header(
-    "📅 수집 날짜"
-)
+st.header("📅 수집 날짜")
 
 c1, c2 = st.columns(2)
 
 with c1:
-
     start_date = st.date_input(
         "시작 날짜",
         value=date.today()
     )
 
 with c2:
-
     end_date = st.date_input(
         "종료 날짜",
         value=date.today()
@@ -119,62 +96,54 @@ with c2:
 
 
 if end_date < start_date:
-
-    st.error(
-        "종료 날짜는 시작 날짜보다 빠를 수 없습니다."
-    )
+    st.error("종료 날짜는 시작 날짜보다 빠를 수 없습니다.")
 
 
 # =========================================================
-# 업체
+# CID
 # =========================================================
 
-st.header(
-    "🏢 7M 업체"
-)
+st.header("🏢 7M 업체")
 
 st.info(
-    "현재 수집기는 7M의 1X2 최종배당 데이터만 사용합니다."
+    "현재 수집기는 7M의 1X2 최종배당 데이터를 대상으로 합니다. "
+    "CID를 비워두면 index.js를 요청합니다."
 )
 
 cid = st.text_input(
     "회사 필터 CID",
     value="",
-    placeholder="비워두면 전체(index.js)"
+    placeholder="예: CID / 비워두면 전체"
 )
 
 
 # =========================================================
-# 수집 설정
+# SETTINGS
 # =========================================================
 
-st.header(
-    "⚙️ 수집 설정"
-)
+st.header("⚙️ 수집 설정")
 
 c1, c2, c3 = st.columns(3)
 
 with c1:
-
     retry_count = st.number_input(
         "실패 재시도 횟수",
         min_value=1,
         max_value=10,
-        value=3
+        value=3,
+        step=1
     )
 
 with c2:
-
     request_delay = st.number_input(
-        "요청 간격(초)",
-        min_value=0.1,
-        max_value=10.0,
-        value=0.5,
-        step=0.1
+        "재시도 간격(초)",
+        min_value=0.0,
+        max_value=30.0,
+        value=1.0,
+        step=0.5
     )
 
 with c3:
-
     hide_logs = st.checkbox(
         "로그 숨김",
         value=True
@@ -182,7 +151,7 @@ with c3:
 
 
 # =========================================================
-# Worker
+# WORKER
 # =========================================================
 
 worker = st.session_state.worker
@@ -190,9 +159,7 @@ worker = st.session_state.worker
 
 if worker and worker.running:
 
-    st.error(
-        "🔴 현재 수집 중"
-    )
+    st.error("🔴 현재 수집 중")
 
     if st.button(
         "⏹ 수집 중지",
@@ -201,12 +168,9 @@ if worker and worker.running:
 
         worker.stop()
 
-        st.warning(
-            "중지 요청을 전달했습니다."
-        )
+        st.warning("중지 요청을 전달했습니다.")
 
         st.rerun()
-
 
 else:
 
@@ -218,27 +182,19 @@ else:
 
         if end_date < start_date:
 
-            st.error(
-                "날짜 범위를 확인하세요."
-            )
+            st.error("날짜 범위를 확인하세요.")
 
         else:
 
             worker = CollectorWorker(
-                start_date,
-                end_date,
+                start_date=start_date,
+                end_date=end_date,
                 cid=cid.strip(),
-                retries=int(
-                    retry_count
-                ),
-                delay=float(
-                    request_delay
-                )
+                retries=int(retry_count),
+                delay=float(request_delay)
             )
 
-            st.session_state.worker = (
-                worker
-            )
+            st.session_state.worker = worker
 
             worker.start()
 
@@ -250,7 +206,7 @@ else:
 
 
 # =========================================================
-# 진행상황
+# PROGRESS
 # =========================================================
 
 worker = st.session_state.worker
@@ -260,16 +216,13 @@ if worker:
 
     st.divider()
 
-    st.header(
-        "📡 수집 진행상황"
-    )
+    st.header("📡 수집 진행상황")
 
     status = worker.status()
 
     st.progress(
         status["progress"]
     )
-
 
     c1, c2, c3, c4 = st.columns(4)
 
@@ -294,14 +247,12 @@ if worker:
         f"{status['failed_days']:,}"
     )
 
-
     if status["last_completed_date"]:
 
         st.info(
             "마지막 완료 날짜: "
             f"**{status['last_completed_date']}**"
         )
-
 
     if status["running"]:
 
@@ -318,52 +269,40 @@ if worker:
     elif status["finished"]:
 
         if status["error"]:
-
-            st.error(
-                status["error"]
-            )
-
+            st.error(status["error"])
         else:
-
-            st.success(
-                "🟢 수집 완료"
-            )
+            st.success("🟢 수집 완료")
 
 
 # =========================================================
-# 로그
+# LOG
 # =========================================================
 
 st.divider()
 
-st.header(
-    "📜 로그"
-)
-
+st.header("📜 로그")
 
 if not hide_logs:
 
-    st.code(
-        database.get_logs(),
-        language="text"
-    )
+    logs = database.get_logs()
+
+    if logs:
+        st.code(logs, language="text")
+    else:
+        st.info("로그가 없습니다.")
 
 else:
 
-    st.info(
-        "로그 숨김 상태입니다."
-    )
+    st.info("로그 숨김 상태입니다.")
 
 
 # =========================================================
-# 진단
+# DIAGNOSTIC
 # =========================================================
 
 st.divider()
 
-st.header(
-    "🔎 7M 연결 진단"
-)
+st.header("🔎 7M 연결 진단")
 
 diagnose_date = st.date_input(
     "진단 날짜",
@@ -373,7 +312,7 @@ diagnose_date = st.date_input(
 
 
 if st.button(
-    "7M 페이지 / JS 진단",
+    "7M 페이지 / History JS 진단",
     use_container_width=True
 ):
 
@@ -387,30 +326,26 @@ if st.button(
         )
 
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
 
     c1.metric(
-        "HTTP 상태",
-        result.get(
-            "status",
-            0
-        )
+        "HTTP",
+        result.get("status", 0)
     )
 
     c2.metric(
-        "JS 데이터",
-        result.get(
-            "size",
-            0
-        )
+        "HTML",
+        f"{result.get('html_size', 0):,}"
     )
 
     c3.metric(
+        "JS",
+        f"{result.get('size', 0):,}"
+    )
+
+    c4.metric(
         "발견 후보",
-        result.get(
-            "found",
-            0
-        )
+        f"{result.get('found', 0):,}"
     )
 
 
@@ -426,16 +361,13 @@ if st.button(
             "7M 서버 응답을 받았습니다."
         )
 
-
         with st.expander(
             "서버 HTML 보기"
         ):
 
             st.code(
-                result.get(
-                    "html",
-                    ""
-                )
+                result.get("html", ""),
+                language="html"
             )
 
 
@@ -444,26 +376,22 @@ if st.button(
         ):
 
             st.code(
-                result.get(
-                    "js",
-                    ""
-                )
+                result.get("js", ""),
+                language="javascript"
             )
 
 
 # =========================================================
-# 동일 최종배당 분석
+# SAME ODDS ANALYSIS
 # =========================================================
 
 st.divider()
 
-st.header(
-    "🎯 동일 최종배당 분석"
-)
+st.header("🎯 동일 최종배당 분석")
 
 st.info(
-    "입력한 배당 자체는 DB에 저장하지 않습니다. "
-    "DB에 이미 저장된 7M 최종배당과 동일한 경기만 검색합니다."
+    "입력한 배당은 DB에 저장하지 않습니다. "
+    "DB에 이미 저장된 7M 경기 중 동일한 1X2 최종배당을 검색합니다."
 )
 
 
@@ -501,21 +429,18 @@ with c3:
 
 
 # =========================================================
-# 음성 입력
+# VOICE RESULT
 # =========================================================
 
-st.subheader(
-    "🎙️ 음성 입력"
-)
+st.subheader("🎙️ 음성 입력 결과")
 
 st.caption(
-    "브라우저에서 음성인식이 지원되는 경우 "
-    "음성 입력을 사용할 수 있습니다."
+    "브라우저 음성인식 결과 또는 직접 입력한 "
+    "숫자 3개를 사용할 수 있습니다."
 )
 
-
 voice_text = st.text_input(
-    "음성 인식 결과를 배당 숫자로 입력",
+    "음성 인식 결과",
     placeholder="예: 1.50 3.50 5.00"
 )
 
@@ -529,16 +454,36 @@ if voice_text:
 
     if len(numbers) >= 3:
 
+        voice_values = [
+            float(numbers[0]),
+            float(numbers[1]),
+            float(numbers[2])
+        ]
+
         st.success(
             "인식된 배당: "
             + " / ".join(
-                numbers[:3]
+                f"{x:.2f}"
+                for x in voice_values
             )
         )
 
+        if st.button(
+            "🎙️ 인식 배당으로 검색",
+            use_container_width=True
+        ):
+
+            st.session_state.analysis_result = (
+                analyzer.run_search(
+                    *voice_values
+                )
+            )
+
+            st.rerun()
+
 
 # =========================================================
-# 분석
+# SEARCH
 # =========================================================
 
 if st.button(
@@ -547,19 +492,17 @@ if st.button(
     use_container_width=True
 ):
 
-    result = analyzer.run_search(
-        home_odds,
-        draw_odds,
-        away_odds
-    )
-
     st.session_state.analysis_result = (
-        result
+        analyzer.run_search(
+            home_odds,
+            draw_odds,
+            away_odds
+        )
     )
 
 
 # =========================================================
-# 분석 결과
+# ANALYSIS RESULT
 # =========================================================
 
 result = st.session_state.analysis_result
@@ -575,40 +518,19 @@ if result:
 
     else:
 
-        rows = result[
-            "results"
-        ]
+        rows = result["results"]
+        stats = result["statistics"]
 
-        stats = result[
-            "statistics"
-        ]
+        st.subheader("📊 분석 결과")
 
+        total = stats["total"]
 
-        st.subheader(
-            "📊 분석 결과"
-        )
-
-
-        total = stats[
-            "total"
-        ]
-
-
-        h = stats[
-            "counts"
-        ]["H"]
-
-        d = stats[
-            "counts"
-        ]["D"]
-
-        a = stats[
-            "counts"
-        ]["A"]
+        h = stats["counts"]["H"]
+        d = stats["counts"]["D"]
+        a = stats["counts"]["A"]
 
 
         c1, c2, c3, c4 = st.columns(4)
-
 
         c1.metric(
             "전체",
@@ -618,84 +540,49 @@ if result:
         c2.metric(
             "승",
             f"{h:,}",
-            (
-                f"{h / total * 100:.2f}%"
-                if total
-                else "0%"
-            )
+            f"{h / total * 100:.2f}%"
+            if total else "0%"
         )
 
         c3.metric(
             "무",
             f"{d:,}",
-            (
-                f"{d / total * 100:.2f}%"
-                if total
-                else "0%"
-            )
+            f"{d / total * 100:.2f}%"
+            if total else "0%"
         )
 
         c4.metric(
             "패",
             f"{a:,}",
-            (
-                f"{a / total * 100:.2f}%"
-                if total
-                else "0%"
-            )
+            f"{a / total * 100:.2f}%"
+            if total else "0%"
         )
 
 
         if total:
 
             st.subheader(
-                "📈 배당상 확률 / 실제확률 / 부족확률"
+                "📈 배당상 확률 / 실제 발생률 / 부족확률"
             )
-
 
             table = []
 
-
             for key, label in [
-
                 ("H", "승"),
                 ("D", "무"),
                 ("A", "패")
-
             ]:
 
-                expected = stats[
-                    "expected"
-                ][key]
-
-                actual = stats[
-                    "actual"
-                ][key]
-
-                difference = stats[
-                    "difference"
-                ][key]
-
-
                 table.append({
-
-                    "결과":
-                        label,
-
+                    "결과": label,
                     "배당상 확률":
-                        f"{expected:.2f}%",
-
+                        f"{stats['expected'][key]:.2f}%",
                     "실제 발생률":
-                        f"{actual:.2f}%",
-
+                        f"{stats['actual'][key]:.2f}%",
                     "부족확률":
-                        f"{difference:+.2f}%",
-
+                        f"{stats['difference'][key]:+.2f}%p",
                     "발생":
-                        stats[
-                            "counts"
-                        ][key],
-
+                        stats["counts"][key],
                     "전체":
                         total
                 })
@@ -709,15 +596,9 @@ if result:
 
 
             best = max(
-                [
-                    "H",
-                    "D",
-                    "A"
-                ],
+                ["H", "D", "A"],
                 key=lambda key:
-                    stats[
-                        "difference"
-                    ][key]
+                    stats["difference"][key]
             )
 
 
@@ -735,14 +616,11 @@ if result:
             )
 
 
-        # =================================================
-        # 검색 경기
-        # =================================================
+        # =====================================================
+        # MATCHES
+        # =====================================================
 
-        st.subheader(
-            "📋 동일배당 경기"
-        )
-
+        st.subheader("📋 동일배당 경기")
 
         if not rows:
 
@@ -753,7 +631,6 @@ if result:
         else:
 
             table = []
-
 
             for row in rows:
 
@@ -769,8 +646,7 @@ if result:
                         row["away_team"],
 
                     "스코어":
-                        f"{row['home_score']}"
-                        f" - "
+                        f"{row['home_score']} - "
                         f"{row['away_score']}",
 
                     "결과":
@@ -779,13 +655,13 @@ if result:
                         ),
 
                     "승":
-                        row["home_odds"],
+                        f"{row['home_odds']:.2f}",
 
                     "무":
-                        row["draw_odds"],
+                        f"{row['draw_odds']:.2f}",
 
                     "패":
-                        row["away_odds"]
+                        f"{row['away_odds']:.2f}"
                 })
 
 
@@ -797,33 +673,24 @@ if result:
 
 
 # =========================================================
-# 업체별 저장량
+# COMPANY DATA
 # =========================================================
 
 st.divider()
 
-st.header(
-    "🏢 저장 데이터"
-)
-
+st.header("🏢 저장 데이터")
 
 counts = database.get_company_counts()
-
 
 if counts:
 
     st.dataframe(
         [
             {
-                "업체":
-                    company,
-
-                "저장 건수":
-                    count
+                "업체": company,
+                "저장 건수": count
             }
-
-            for company, count
-            in counts.items()
+            for company, count in counts.items()
         ],
         use_container_width=True,
         hide_index=True
@@ -837,22 +704,18 @@ else:
 
 
 # =========================================================
-# 전체 DB
+# ALL DATABASE
 # =========================================================
 
 with st.expander(
     "🗃️ 저장된 전체 경기 보기"
 ):
 
-    matches = (
-        database.get_all_matches()
-    )
-
+    matches = database.get_all_matches()
 
     if matches:
 
         table = []
-
 
         for row in matches:
 
@@ -868,8 +731,7 @@ with st.expander(
                     row["away_team"],
 
                 "스코어":
-                    f"{row['home_score']}"
-                    f" - "
+                    f"{row['home_score']} - "
                     f"{row['away_score']}",
 
                 "결과":
@@ -878,13 +740,13 @@ with st.expander(
                     ),
 
                 "승":
-                    row["home_odds"],
+                    f"{row['home_odds']:.2f}",
 
                 "무":
-                    row["draw_odds"],
+                    f"{row['draw_odds']:.2f}",
 
                 "패":
-                    row["away_odds"]
+                    f"{row['away_odds']:.2f}"
             })
 
 
@@ -902,24 +764,20 @@ with st.expander(
 
 
 # =========================================================
-# 자동 갱신
+# AUTO REFRESH
 # =========================================================
 
 worker = st.session_state.worker
-
 
 if worker and worker.running:
 
     st.markdown(
         """
         <script>
-        setTimeout(
-            function() {
-                window.parent.location.reload();
-            },
-            3000
-        );
+        setTimeout(function() {
+            window.parent.location.reload();
+        }, 3000);
         </script>
         """,
         unsafe_allow_html=True
-        )
+    )
