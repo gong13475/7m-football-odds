@@ -55,3 +55,31 @@ def extract_odds(text):
         r"(?<![\d.])\d+(?:\.\d+)?",
         text
     )
+def diagnose(target_date, cid=""):
+    """
+    7M 페이지 연결 진단
+    """
+
+    try:
+        html = download_day(
+            target_date,
+            cid
+        )
+
+        return {
+            "status": 200,
+            "size": len(html),
+            "has_result": "result_kr" in html,
+            "has_compare": "비교" in html,
+            "html": html[:10000]
+        }
+
+    except Exception as e:
+
+        return {
+            "status": 0,
+            "size": 0,
+            "has_result": False,
+            "has_compare": False,
+            "html": f"ERROR: {e}"
+        }
