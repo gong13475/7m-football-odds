@@ -1711,3 +1711,446 @@ def diagnose_url(url):
 # ============================================================
 
 init_db()
+# ============================================================
+# 7M URL
+# ============================================================
+
+DEFAULT_7M_URL = "https://www.7m.com.cn/"
+
+
+def build_7m_url(target_date, cid=""):
+    """
+    현재 7M 기본 페이지를 요청한다.
+
+    실제 History JS가 외부 파일로 제공되는 경우에는
+    collect_day()에서 HTML의 script src를 추가로 검사한다.
+    """
+
+    return DEFAULT_7M_URL
+
+
+# ============================================================
+# EXTERNAL JAVASCRIPT
+# ============================================================
+
+def extract_script_urls(html, base_url=DEFAULT_7M_URL):
+
+    if not html:
+        return []
+
+    urls = []
+
+    # script src="..."
+    pattern = re.compile(
+        r'<script[^>]+src\s*=\s*["\']([^"\']+)["\']',
+        re.IGNORECASE
+    )
+
+    for match in pattern.finditer(html):
+
+        src = match.group(1).strip()
+
+        if not src:
+            continue
+
+        if src.startswith("//"):
+            url = "https:" + src
+
+        elif src.startswith("http://") or src.startswith("https://"):
+            url = src
+
+        elif src.startswith("/"):
+            # 기본 도메인
+            m = re.match(
+                r"(https?://[^/]+)",
+                base_url
+            )
+
+            if not m:
+                continue
+
+            url = m.group(1) + src
+
+        else:
+            # 상대 경로
+            base = base_url.rsplit("/", 1)[0]
+
+            url = base + "/" + src
+
+        if url not in urls:
+            urls.append(url)
+
+    return urls
+
+
+def find_history_script(html, base_url=DEFAULT_7M_URL):
+
+    """
+    HTML에 포함된 JS 중 History / dt 데이터를 포함할 가능성이
+    높은 파일을 찾는다.
+
+    반환:
+        (url, js)
+    """
+
+    script_urls = extract_script_urls(
+        html,
+        base_url
+    )
+
+    candidates = []
+
+    for url in script_urls:
+
+        lower = url.lower()
+
+        score = 0
+
+        if "history" in lower:
+            score += 10
+
+        if "data" in lower:
+            score += 5
+
+        if "index" in lower:
+            score += 2
+
+        candidates.append(
+            (score, url)
+        )
+
+    candidates.sort(
+        key=lambda x: x[0],
+        reverse=True
+    )
+
+    # 점수가 높은 JS부터 확인
+    for _, url in candidates:
+
+        try:
+
+            js = fetch_url(
+                url,
+                timeout=20
+            )
+
+            if (
+                re.search(
+                    r'\bvar\s+dt\s*=',
+                    js
+                )
+                or
+                re.search(
+                    r'\b(?:let|const)\s+dt\s*=',
+                    js
+                )
+                or
+                "|".join([])
+            ):
+
+                return url, js
+
+        except Exception:
+
+            continue
+
+    # dt가 발견되지 않았더라도 index/history 계열
+    # 첫 번째 JS를 반환
+    for _, url in candidates:
+
+        try:
+
+            js = fetch_url(
+                url,
+                timeout=20
+            )
+
+            return url, js
+
+        except Exception:
+
+            continue
+
+    return "", ""
+
+
+# ============================================================
+# COLLECT DAY
+# ============================================================
+
+def collect_day(
+    target_date,
+    cid=""
+):
+
+    target = normalize_date(
+        target_date
+    )
+
+    if not target:
+
+        raise ValueError(
+            f"잘못된 날짜: {target_date}"
+        )
+
+    url = build_7m_url(
+        target,
+        cid
+    )
+
+    add_log(
+        f"{target} 7M 수집 시작"
+    )
+
+    html = fetch_url(
+        url
+    )
+
+    add_log(
+        f"{target} 기본 HTML: "
+        f"{len(html):,} bytes"
+    )
+
+    # --------------------------------------------------------
+    # 1. HTML 자체에 dt가 있는 경우
+    # --------------------------------------------------------
+
+    rows = parse_dt_from_html(
+        html
+    )
+
+    js_url = ""
+    js = ""
+
+    # --------------------------------------------------------
+    # 2. 외부 History JS 탐색
+    # --------------------------------------------------------
+
+    if not rows:
+
+        js_url, js = find_history_script(
+            html,
+            url
+        )
+
+        if js:
+
+            add_log(
+                f"History JS 발견: {js_url}"
+            )
+
+            add_log(
+                f"History JS 크기: "
+                f"{len(js):,} bytes"
+            )
+
+            rows = parse_dt_from_html(
+                js
+            )
+
+    # --------------------------------------------------------
+    # 날짜 필터
+    # --------------------------------------------------------
+
+    rows = filter_matches_by_date(
+        rows,
+        target
+    )
+
+    # --------------------------------------------------------
+    # CID 필터
+    # --------------------------------------------------------
+
+    if cid:
+
+        cid = str(cid).strip()
+
+        rows = [
+            row
+            for row in rows
+            if str(
+                row.get("cid", "")
+            ).strip() == cid
+        ]
+
+    found = len(rows)
+
+    saved = 0
+
+    for row in rows:
+
+        try:
+
+            saved += save_match(
+                row
+            )
+
+        except Exception as exc:
+
+            add_log(
+                f"{target} 저장 실패 "
+                f"{row.get('match_id')}: {exc}",
+                "ERROR"
+            )
+
+    save_collection_day(
+        target,
+        "DONE",
+        found,
+        saved,
+        ""
+    )
+
+    add_log(
+        f"{target}: 발견 {found}, "
+        f"신규 {saved}"
+    )
+
+    return {
+        "found": found,
+        "saved": saved,
+        "rows": rows
+    }
+
+
+# ============================================================
+# DIAGNOSE
+# ============================================================
+
+def diagnose(
+    target_date,
+    cid=""
+):
+
+    target = normalize_date(
+        target_date
+    )
+
+    if not target:
+
+        return {
+            "status": 0,
+            "html_size": 0,
+            "size": 0,
+            "found": 0,
+            "html": "",
+            "js": "",
+            "error": "잘못된 진단 날짜"
+        }
+
+    url = build_7m_url(
+        target,
+        cid
+    )
+
+    try:
+
+        html = fetch_url(
+            url
+        )
+
+        js_url, js = find_history_script(
+            html,
+            url
+        )
+
+        # HTML 자체 dt
+        rows = parse_dt_from_html(
+            html
+        )
+
+        # 외부 JS dt
+        if not rows and js:
+
+            rows = parse_dt_from_html(
+                js
+            )
+
+        rows = filter_matches_by_date(
+            rows,
+            target
+        )
+
+        if cid:
+
+            cid = str(cid).strip()
+
+            rows = [
+                row
+                for row in rows
+                if str(
+                    row.get("cid", "")
+                ).strip() == cid
+            ]
+
+        return {
+
+            "status": 200,
+
+            "html_size":
+                len(html),
+
+            "size":
+                len(js),
+
+            "found":
+                len(rows),
+
+            "html":
+                html,
+
+            "js":
+                js,
+
+            "js_url":
+                js_url,
+
+            "error":
+                ""
+        }
+
+    except HTTPError as exc:
+
+        return {
+
+            "status":
+                getattr(
+                    exc,
+                    "code",
+                    0
+                ),
+
+            "html_size": 0,
+
+            "size": 0,
+
+            "found": 0,
+
+            "html": "",
+
+            "js": "",
+
+            "error":
+                f"HTTP 오류: {exc}"
+
+        }
+
+    except Exception as exc:
+
+        return {
+
+            "status": 0,
+
+            "html_size": 0,
+
+            "size": 0,
+
+            "found": 0,
+
+            "html": "",
+
+            "js": "",
+
+            "error":
+                str(exc)
+        }
