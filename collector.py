@@ -1,7 +1,6 @@
 import re
 import time
 import requests
-
 from bs4 import BeautifulSoup
 
 from database import save_match
@@ -16,70 +15,161 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/131.0 Safari/537.36"
     ),
-    "Accept-Language": "ko-KR,ko;q=0.9"
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8"
 }
 
-REQUEST_DELAY = 1.5
+
+def download_day(target_date, cid=""):
+
+    params = {
+        "dt": target_date.strftime("%Y-%m-%d")
+    }
+
+    if cid:
+        params["cid"] = cid
+
+    response = requests.get(
+        BASE_URL,
+        params=params,
+        headers=HEADERS,
+        timeout=30
+    )
+
+    response.raise_for_status()
+
+    response.encoding = response.apparent_encoding or "utf-8"
+
+    time.sleep(1)
+
+    return response.text
 
 
-def probability(odds):
-    if odds <= 0:
-        return 0.0
+def clean(text):
 
-    return round(100 / odds, 2)
+    return re.sub(
+        r"\s+",
+        " ",
+        str(text)
+    ).strip()
 
 
 def result_code(score):
-    m = re.search(
+
+    match = re.search(
         r"(\d+)\s*-\s*(\d+)",
         score or ""
     )
 
-    if not m:
+    if not match:
         return None
 
-    home = int(m.group(1))
-    away = int(m.group(2))
+    home = int(match.group(1))
+    away = int(match.group(2))
 
     if home > away:
         return "H"
 
-    if home == away:
-        return "D"
+    if home < away:
+        return "A"
 
-    return "A"
+    return "D"
+
+
+def probability(odds):
+
+    try:
+
+        odds = float(odds)
+
+        if odds <= 0:
+            return 0.0
+
+        return round(
+            100 / odds,
+            2
+        )
+
+    except Exception:
+
+        return 0.0
 
 
 def extract_odds(text):
-    values = re.findall(
+
+    numbers = re.findall(
         r"(?<![\d.])\d+(?:\.\d+)?",
         text
     )
-def diagnose(target_date, cid=""):
-    """
-    7M 페이지 연결 진단
-    """
+
+    if len(numbers) < 3:
+        return None
 
     try:
-        html = download_day(
-            target_date,
-            cid
+
+        values = [
+            float(x)
+            for x in numbers[:3]
+        ]
+
+        if all(
+            value > 1
+            for value in values
+        ):
+            return tuple(values)
+
+    except Exception:
+        pass
+
+    return None
+
+
+def parse_page(html, target_date):
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
+    )
+
+    text = soup.get_text(
+        "\n"
+    )
+
+    lines = [
+        clean(line)
+        for line in text.splitlines()
+        if clean(line)
+    ]
+
+    results = []
+
+    for i, line in enumerate(lines):
+
+        score_match = re.search(
+            r"(\d+)\s*-\s*(\d+)",
+            line
         )
 
-        return {
-            "status": 200,
-            "size": len(html),
-            "has_result": "result_kr" in html,
-            "has_compare": "비교" in html,
-            "html": html[:10000]
-        }
+        if not score_match:
+            continue
 
-    except Exception as e:
+        score = score_match.group(0)
 
-        return {
-            "status": 0,
-            "size": 0,
-            "has_result": False,
-            "has_compare": False,
-            "html": f"ERROR: {e}"
-        }
+        result = result_code(score)
+
+        if not result:
+            continue
+
+        start = max(
+            0,
+            i - 20
+        )
+
+        end = min(
+            len(lines),
+            i + 20
+        )
+
+        block = lines[
+            start:end
+        ]
