@@ -5,9 +5,16 @@ import threading
 
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from urllib.request import Request, urlopen
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+
+from urllib.request import (
+    Request,
+    urlopen
+)
+
+from urllib.error import (
+    HTTPError,
+    URLError
+)
 
 
 DB_PATH = Path("odds.db")
@@ -16,26 +23,15 @@ _db_lock = threading.RLock()
 
 
 # ============================================================
-# 7M ENDPOINTS
+# 7M URL CONFIG
 # ============================================================
 
-BASE_ENDPOINTS = [
-    "https://data.7mkr2.com/fixture/",
-    "https://data.7mkr.com/fixture/",
-    "https://www.7m.com.cn/",
-    "https://www.7mkr.com/",
+BASE_URLS = [
+    "https://www.7m.com.cn",
+    "https://www.7m.com",
+    "https://www.7msport.com",
+    "https://www.7msport.com/"
 ]
-
-ODDS_ENDPOINTS = [
-    "https://1x2.lucksport.com/default_kr.shtml",
-    "https://odds.lucksport.com/",
-]
-
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/140.0 Safari/537.36"
-)
 
 
 # ============================================================
@@ -52,8 +48,13 @@ def get_connection():
 
     conn.row_factory = sqlite3.Row
 
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute(
+        "PRAGMA journal_mode=WAL"
+    )
+
+    conn.execute(
+        "PRAGMA synchronous=NORMAL"
+    )
 
     return conn
 
@@ -66,99 +67,102 @@ def init_db():
 
         try:
 
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS matches (
+            conn.executescript("""
 
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+            CREATE TABLE IF NOT EXISTS matches (
 
-                    match_key TEXT NOT NULL UNIQUE,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
 
-                    match_date TEXT NOT NULL,
+                match_key TEXT NOT NULL UNIQUE,
 
-                    league TEXT DEFAULT '',
+                match_date TEXT NOT NULL,
 
-                    home_team TEXT DEFAULT '',
-                    away_team TEXT DEFAULT '',
+                league TEXT DEFAULT '',
 
-                    home_score INTEGER,
-                    away_score INTEGER,
+                home_team TEXT DEFAULT '',
+                away_team TEXT DEFAULT '',
 
-                    result TEXT NOT NULL,
+                home_score INTEGER,
+                away_score INTEGER,
 
-                    home_odds REAL NOT NULL,
-                    draw_odds REAL NOT NULL,
-                    away_odds REAL NOT NULL,
+                result TEXT NOT NULL,
 
-                    home_probability REAL NOT NULL,
-                    draw_probability REAL NOT NULL,
-                    away_probability REAL NOT NULL,
+                home_odds REAL NOT NULL,
+                draw_odds REAL NOT NULL,
+                away_odds REAL NOT NULL,
 
-                    source TEXT DEFAULT '',
+                home_probability REAL NOT NULL,
+                draw_probability REAL NOT NULL,
+                away_probability REAL NOT NULL,
 
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                );
+                source TEXT DEFAULT '',
 
-                CREATE INDEX IF NOT EXISTS
-                idx_matches_date
-                ON matches(match_date);
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
 
-                CREATE INDEX IF NOT EXISTS
-                idx_matches_odds
-                ON matches(
-                    home_odds,
-                    draw_odds,
-                    away_odds
-                );
+            CREATE INDEX IF NOT EXISTS
+            idx_matches_date
+            ON matches(match_date);
 
-                CREATE INDEX IF NOT EXISTS
-                idx_matches_result
-                ON matches(result);
+            CREATE INDEX IF NOT EXISTS
+            idx_matches_odds
+            ON matches(
+                home_odds,
+                draw_odds,
+                away_odds
+            );
 
-                CREATE TABLE IF NOT EXISTS collection_days (
+            CREATE INDEX IF NOT EXISTS
+            idx_matches_result
+            ON matches(result);
 
-                    match_date TEXT PRIMARY KEY,
 
-                    status TEXT NOT NULL,
+            CREATE TABLE IF NOT EXISTS collection_days (
 
-                    found INTEGER DEFAULT 0,
+                match_date TEXT PRIMARY KEY,
 
-                    saved INTEGER DEFAULT 0,
+                status TEXT NOT NULL,
 
-                    error TEXT DEFAULT '',
+                found INTEGER DEFAULT 0,
 
-                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-                );
+                saved INTEGER DEFAULT 0,
 
-                CREATE TABLE IF NOT EXISTS collection_state (
+                error TEXT DEFAULT '',
 
-                    id INTEGER PRIMARY KEY CHECK(id = 1),
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
 
-                    start_date TEXT,
 
-                    end_date TEXT,
+            CREATE TABLE IF NOT EXISTS collection_state (
 
-                    last_completed_date TEXT,
+                id INTEGER PRIMARY KEY CHECK(id = 1),
 
-                    running INTEGER DEFAULT 0,
+                start_date TEXT,
 
-                    stopped INTEGER DEFAULT 0,
+                end_date TEXT,
 
-                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-                );
+                last_completed_date TEXT,
 
-                CREATE TABLE IF NOT EXISTS collection_logs (
+                running INTEGER DEFAULT 0,
 
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stopped INTEGER DEFAULT 0,
 
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
 
-                    level TEXT DEFAULT 'INFO',
 
-                    message TEXT NOT NULL
-                );
-                """
-            )
+            CREATE TABLE IF NOT EXISTS collection_logs (
+
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
+                level TEXT DEFAULT 'INFO',
+
+                message TEXT NOT NULL
+            );
+
+            """)
 
             conn.commit()
 
@@ -171,7 +175,10 @@ def init_db():
 # LOG
 # ============================================================
 
-def add_log(message, level="INFO"):
+def add_log(
+    message,
+    level="INFO"
+):
 
     with _db_lock:
 
@@ -238,107 +245,86 @@ def get_logs(limit=500):
 # ============================================================
 
 DEFAULT_HEADERS = {
-    "User-Agent": USER_AGENT,
+
+    "User-Agent": (
+        "Mozilla/5.0 "
+        "(Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
+        "Chrome/140.0 Safari/537.36"
+    ),
+
     "Accept": (
         "text/html,application/xhtml+xml,"
         "application/xml;q=0.9,*/*;q=0.8"
     ),
-    "Accept-Language": (
-        "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
-    ),
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
-    "Referer": "https://www.7mkr.com/",
+
+    "Accept-Language":
+        "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+
+    "Connection":
+        "keep-alive"
 }
 
 
-def fetch_url(url, timeout=30):
+def fetch_response(
+    url,
+    timeout=30
+):
 
     request = Request(
         url,
         headers=DEFAULT_HEADERS
     )
 
-    try:
+    response = urlopen(
+        request,
+        timeout=timeout
+    )
 
-        with urlopen(
-            request,
-            timeout=timeout
-        ) as response:
+    return response
 
-            raw = response.read()
 
-            status = getattr(
-                response,
-                "status",
-                200
-            )
+def decode_response(
+    response
+):
 
-            charset = (
-                response.headers.get_content_charset()
-            )
+    raw = response.read()
 
-            if charset:
+    charset = (
+        response.headers.get_content_charset()
+    )
 
-                try:
-
-                    text = raw.decode(
-                        charset,
-                        errors="ignore"
-                    )
-
-                except Exception:
-
-                    text = raw.decode(
-                        "utf-8",
-                        errors="ignore"
-                    )
-
-            else:
-
-                text = raw.decode(
-                    "utf-8",
-                    errors="ignore"
-                )
-
-            return {
-                "status": status,
-                "url": response.geturl(),
-                "html": text,
-                "size": len(raw)
-            }
-
-    except HTTPError as exc:
-
-        body = ""
+    if charset:
 
         try:
-            body = exc.read().decode(
-                "utf-8",
+
+            return raw.decode(
+                charset,
                 errors="ignore"
             )
+
         except Exception:
             pass
 
-        raise RuntimeError(
-            f"HTTP {exc.code}: {url}"
-            + (
-                f" / body={body[:300]}"
-                if body
-                else ""
-            )
-        )
+    return raw.decode(
+        "utf-8",
+        errors="ignore"
+    )
 
-    except URLError as exc:
 
-        raise RuntimeError(
-            f"Network error: {url} / {exc}"
-        )
+def fetch_url(
+    url,
+    timeout=30
+):
 
-    except Exception as exc:
+    with fetch_response(
+        url,
+        timeout
+    ) as response:
 
-        raise RuntimeError(
-            f"Request failed: {url} / {exc}"
+        return decode_response(
+            response
         )
 
 
@@ -362,8 +348,15 @@ def normalize_date(value):
     if not text:
         return None
 
-    text = text.replace(".", "-")
-    text = text.replace("/", "-")
+    text = text.replace(
+        ".",
+        "-"
+    )
+
+    text = text.replace(
+        "/",
+        "-"
+    )
 
     try:
 
@@ -412,12 +405,20 @@ def parse_match_datetime(value):
 # RESULT
 # ============================================================
 
-def get_result(home_score, away_score):
+def get_result(
+    home_score,
+    away_score
+):
 
     try:
 
-        home_score = int(home_score)
-        away_score = int(away_score)
+        home_score = int(
+            home_score
+        )
+
+        away_score = int(
+            away_score
+        )
 
     except (
         TypeError,
@@ -425,6 +426,7 @@ def get_result(home_score, away_score):
     ):
 
         return "D"
+
 
     if home_score > away_score:
         return "H"
@@ -468,27 +470,25 @@ def parse_odds(value):
     if not text:
         return None
 
-    text = text.replace(",", "")
-
     try:
 
         number = float(text)
 
-        if valid_odds(number):
-            return number
+        if not valid_odds(number):
+            return None
+
+        return number
 
     except (
         TypeError,
         ValueError
     ):
 
-        pass
-
-    return None
+        return None
 
 
 # ============================================================
-# JS / DT PARSER
+# JS ARRAY
 # ============================================================
 
 def extract_dt_block(html):
@@ -504,8 +504,7 @@ def extract_dt_block(html):
 
         r'\bconst\s+dt\s*=\s*(\[[\s\S]*?\])\s*;',
 
-        r'\bdt\s*=\s*(\[[\s\S]*?\])\s*;',
-
+        r'\bdt\s*=\s*(\[[\s\S]*?\])\s*;'
     ]
 
     for pattern in patterns:
@@ -522,18 +521,12 @@ def extract_dt_block(html):
     return None
 
 
-def split_js_array_strings(array_text):
+def split_js_array_strings(
+    array_text
+):
 
     if not array_text:
         return []
-
-    text = array_text.strip()
-
-    if text.startswith("["):
-        text = text[1:]
-
-    if text.endswith("]"):
-        text = text[:-1]
 
     results = []
 
@@ -543,18 +536,32 @@ def split_js_array_strings(array_text):
 
     escaped = False
 
+    text = array_text.strip()
+
+    if text.startswith("["):
+        text = text[1:]
+
+    if text.endswith("]"):
+        text = text[:-1]
+
+
     for char in text:
 
         if escaped:
 
             current.append(char)
+
             escaped = False
+
             continue
 
-        if quote and char == "\\":
+
+        if char == "\\" and quote:
 
             escaped = True
+
             continue
+
 
         if quote:
 
@@ -568,10 +575,16 @@ def split_js_array_strings(array_text):
 
             continue
 
-        if char in ("'", '"'):
+
+        if char in (
+            '"',
+            "'"
+        ):
 
             quote = char
+
             continue
+
 
         if char == ",":
 
@@ -581,26 +594,33 @@ def split_js_array_strings(array_text):
 
             if value:
 
-                results.append(value)
+                results.append(
+                    value
+                )
 
             current = []
 
             continue
 
+
         current.append(char)
+
 
     value = "".join(
         current
     ).strip()
 
     if value:
-        results.append(value)
+
+        results.append(
+            value
+        )
 
     return results
 
 
 # ============================================================
-# DT ROW
+# ROW
 # ============================================================
 
 def parse_dt_row(raw):
@@ -612,6 +632,7 @@ def parse_dt_row(raw):
 
     if len(parts) < 14:
         return None
+
 
     match_id = parts[0].strip()
 
@@ -635,6 +656,7 @@ def parse_dt_row(raw):
 
     half_score = parts[10].strip()
 
+
     match_datetime = parse_match_datetime(
         dt_value
     )
@@ -642,69 +664,80 @@ def parse_dt_row(raw):
     if not match_datetime:
         return None
 
-    first_home = parse_odds(
-        parts[11]
+
+    first_home = (
+        parse_odds(parts[11])
         if len(parts) > 11
         else None
     )
 
-    first_draw = parse_odds(
-        parts[12]
+    first_draw = (
+        parse_odds(parts[12])
         if len(parts) > 12
         else None
     )
 
-    first_away = parse_odds(
-        parts[13]
+    first_away = (
+        parse_odds(parts[13])
         if len(parts) > 13
         else None
     )
 
-    final_home = parse_odds(
-        parts[14]
+
+    final_home = (
+        parse_odds(parts[14])
         if len(parts) > 14
         else None
     )
 
-    final_draw = parse_odds(
-        parts[15]
+    final_draw = (
+        parse_odds(parts[15])
         if len(parts) > 15
         else None
     )
 
-    final_away = parse_odds(
-        parts[16]
+    final_away = (
+        parse_odds(parts[16])
         if len(parts) > 16
         else None
     )
 
+
     home_odds = (
         final_home
-        if final_home is not None
-        else first_home
+        or first_home
     )
 
     draw_odds = (
         final_draw
-        if final_draw is not None
-        else first_draw
+        or first_draw
     )
 
     away_odds = (
         final_away
-        if final_away is not None
-        else first_away
+        or first_away
     )
+
 
     if not (
         valid_odds(home_odds)
         and valid_odds(draw_odds)
         and valid_odds(away_odds)
     ):
+
         return None
+
 
     try:
         hs = int(home_score)
+    except (
+        TypeError,
+        ValueError
+    ):
+        return None
+
+
+    try:
         aws = int(away_score)
     except (
         TypeError,
@@ -712,47 +745,65 @@ def parse_dt_row(raw):
     ):
         return None
 
+
     result = get_result(
         hs,
         aws
     )
 
+
     return {
 
-        "match_id": match_id,
+        "match_id":
+            match_id,
 
-        "match_key": match_id,
+        "match_key":
+            match_id,
 
-        "match_datetime": match_datetime,
+        "match_datetime":
+            match_datetime,
 
         "match_date":
             match_datetime.date().isoformat(),
 
-        "league": league,
+        "league":
+            league,
 
-        "cid": cid,
+        "cid":
+            cid,
 
-        "home_id": home_id,
+        "home_id":
+            home_id,
 
-        "away_id": away_id,
+        "away_id":
+            away_id,
 
-        "home_team": home_team,
+        "home_team":
+            home_team,
 
-        "away_team": away_team,
+        "away_team":
+            away_team,
 
-        "home_score": hs,
+        "home_score":
+            hs,
 
-        "away_score": aws,
+        "away_score":
+            aws,
 
-        "half_score": half_score,
+        "half_score":
+            half_score,
 
-        "result": result,
+        "result":
+            result,
 
-        "home_odds": home_odds,
+        "home_odds":
+            home_odds,
 
-        "draw_odds": draw_odds,
+        "draw_odds":
+            draw_odds,
 
-        "away_odds": away_odds,
+        "away_odds":
+            away_odds,
 
         "home_probability":
             1.0 / home_odds,
@@ -763,7 +814,8 @@ def parse_dt_row(raw):
         "away_probability":
             1.0 / away_odds,
 
-        "source": "7M"
+        "source":
+            "7M"
     }
 
 
@@ -796,7 +848,7 @@ def parse_dt_from_html(html):
         except Exception as exc:
 
             add_log(
-                f"dt parsing error: {exc}",
+                f"dt 행 파싱 오류: {exc}",
                 "WARNING"
             )
 
@@ -804,49 +856,7 @@ def parse_dt_from_html(html):
 
 
 # ============================================================
-# GENERIC DATA EXTRACTION
-# ============================================================
-
-def extract_json_like_arrays(html):
-
-    """
-    dt가 사라진 경우를 대비한 보조 탐색.
-
-    경기 ID / 날짜 / 팀명 / 배당처럼 보이는
-    문자열 패턴을 찾는다.
-
-    실제 저장은 검증된 parse_dt_row만 사용한다.
-    """
-
-    if not html:
-        return []
-
-    patterns = [
-
-        r'"\d{6,}"\s*,\s*"20\d{2}[,/-]\d{1,2}[,/-]\d{1,2}',
-
-        r"'20\d{2}[,/-]\d{1,2}[,/-]\d{1,2}",
-
-        r"20\d{2}[,/-]\d{1,2}[,/-]\d{1,2}",
-
-    ]
-
-    found = set()
-
-    for pattern in patterns:
-
-        for match in re.findall(
-            pattern,
-            html
-        ):
-
-            found.add(match)
-
-    return list(found)
-
-
-# ============================================================
-# FILTER
+# DATE FILTER
 # ============================================================
 
 def filter_matches_by_date(
@@ -883,15 +893,53 @@ def save_match(row):
     if not match_key:
 
         match_key = "|".join([
-            str(row.get("match_date", "")),
-            str(row.get("home_team", "")),
-            str(row.get("away_team", "")),
-            str(row.get("home_score", "")),
-            str(row.get("away_score", "")),
-            str(row.get("home_odds", "")),
-            str(row.get("draw_odds", "")),
-            str(row.get("away_odds", "")),
+
+            str(row.get(
+                "match_date",
+                ""
+            )),
+
+            str(row.get(
+                "home_team",
+                ""
+            )),
+
+            str(row.get(
+                "away_team",
+                ""
+            )),
+
+            str(row.get(
+                "home_score",
+                ""
+            )),
+
+            str(row.get(
+                "away_score",
+                ""
+            )),
+
+            str(row.get(
+                "home_odds",
+                ""
+            )),
+
+            str(row.get(
+                "draw_odds",
+                ""
+            )),
+
+            str(row.get(
+                "away_odds",
+                ""
+            )),
+
+            str(row.get(
+                "result",
+                ""
+            ))
         ])
+
 
     with _db_lock:
 
@@ -920,6 +968,7 @@ def save_match(row):
                     source
 
                 )
+
                 VALUES (
                     ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?,
@@ -927,6 +976,7 @@ def save_match(row):
                 )
                 """,
                 (
+
                     match_key,
 
                     row.get(
@@ -949,9 +999,13 @@ def save_match(row):
                         ""
                     ),
 
-                    row.get("home_score"),
+                    row.get(
+                        "home_score"
+                    ),
 
-                    row.get("away_score"),
+                    row.get(
+                        "away_score"
+                    ),
 
                     row.get(
                         "result",
@@ -1055,15 +1109,20 @@ def get_all_odds():
         rows = conn.execute(
             """
             SELECT
+
                 match_key,
                 match_date,
                 home_team,
                 away_team,
+
                 home_odds AS final_home,
                 draw_odds AS final_draw,
                 away_odds AS final_away,
+
                 result
+
             FROM matches
+
             ORDER BY match_date DESC, id DESC
             """
         ).fetchall()
@@ -1080,11 +1139,10 @@ def get_all_odds():
 
 def get_company_names():
 
-    return (
-        ["7M"]
-        if get_match_count()
-        else []
-    )
+    if get_match_count():
+        return ["7M"]
+
+    return []
 
 
 def get_company_counts():
@@ -1114,12 +1172,15 @@ def get_same_odds(
             """
             SELECT *
             FROM matches
+
             WHERE ABS(home_odds - ?) < ?
               AND ABS(draw_odds - ?) < ?
               AND ABS(away_odds - ?) < ?
+
             ORDER BY match_date DESC, id DESC
             """,
             (
+
                 float(home_odds),
                 tolerance,
 
@@ -1162,19 +1223,24 @@ def save_collection_day(
             conn.execute(
                 """
                 INSERT INTO collection_days (
+
                     match_date,
                     status,
                     found,
                     saved,
                     error,
                     updated_at
+
                 )
+
                 VALUES (
-                    ?, ?, ?, ?, ?,
-                    CURRENT_TIMESTAMP
+                    ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
                 )
+
                 ON CONFLICT(match_date)
+
                 DO UPDATE SET
+
                     status=excluded.status,
                     found=excluded.found,
                     saved=excluded.saved,
@@ -1182,6 +1248,7 @@ def save_collection_day(
                     updated_at=CURRENT_TIMESTAMP
                 """,
                 (
+
                     target_date.isoformat()
                     if hasattr(
                         target_date,
@@ -1223,27 +1290,44 @@ def save_collection_state(
             conn.execute(
                 """
                 INSERT INTO collection_state (
+
                     id,
                     start_date,
                     end_date,
                     last_completed_date,
                     running,
                     stopped
+
                 )
+
                 VALUES (
                     1, ?, ?, ?, ?, ?
                 )
+
                 ON CONFLICT(id)
+
                 DO UPDATE SET
-                    start_date=excluded.start_date,
-                    end_date=excluded.end_date,
-                    last_completed_date=
+
+                    start_date =
+                        excluded.start_date,
+
+                    end_date =
+                        excluded.end_date,
+
+                    last_completed_date =
                         excluded.last_completed_date,
-                    running=excluded.running,
-                    stopped=excluded.stopped,
-                    updated_at=CURRENT_TIMESTAMP
+
+                    running =
+                        excluded.running,
+
+                    stopped =
+                        excluded.stopped,
+
+                    updated_at =
+                        CURRENT_TIMESTAMP
                 """,
                 (
+
                     str(start_date)
                     if start_date
                     else None,
@@ -1295,77 +1379,7 @@ def get_collection_state():
 
 
 # ============================================================
-# URL BUILD
-# ============================================================
-
-def build_fixture_url(
-    target_date
-):
-
-    """
-    현재 7M data 서버는 fixture 페이지를 제공한다.
-
-    날짜 파라미터는 사이트 버전에 따라 상대값을
-    사용하는 경우가 있으므로 우선 기본 fixture를
-    사용한다.
-    """
-
-    target = normalize_date(
-        target_date
-    )
-
-    if not target:
-        return BASE_ENDPOINTS[0]
-
-    return (
-        BASE_ENDPOINTS[0]
-        + "?"
-        + urlencode({
-            "date": target.isoformat()
-        })
-    )
-
-
-def build_candidate_urls(
-    target_date,
-    cid=""
-):
-
-    target = normalize_date(
-        target_date
-    )
-
-    urls = []
-
-    if target:
-
-        urls.append(
-            build_fixture_url(
-                target
-            )
-        )
-
-    urls.extend(
-        BASE_ENDPOINTS
-    )
-
-    urls.extend(
-        ODDS_ENDPOINTS
-    )
-
-    # 중복 제거
-    result = []
-
-    for url in urls:
-
-        if url not in result:
-            result.append(url)
-
-    return result
-
-
-# ============================================================
-# FETCH / COLLECT
+# HTML COLLECTION
 # ============================================================
 
 def collect_html(
@@ -1411,39 +1425,132 @@ def collect_html(
     }
 
 
-def collect_url(
-    url,
-    target_date=None
+# ============================================================
+# 7M URL DISCOVERY
+# ============================================================
+
+def build_candidate_urls(
+    target_date=None,
+    cid=""
 ):
 
-    add_log(
-        f"7M 요청: {url}"
-    )
+    urls = []
 
-    response = fetch_url(
-        url
-    )
+    for base in BASE_URLS:
 
-    html = response["html"]
+        base = base.rstrip("/")
 
-    add_log(
-        f"HTTP {response['status']} / "
-        f"HTML {response['size']:,}"
-    )
+        urls.extend([
 
-    result = collect_html(
-        html,
-        target_date
-    )
+            f"{base}/",
 
-    add_log(
-        f"7M 후보 "
-        f"{result['found']}건 / "
-        f"신규 저장 "
-        f"{result['saved']}건"
-    )
+            f"{base}/index.js",
+
+            f"{base}/history.js",
+
+            f"{base}/history/",
+
+            f"{base}/en/",
+
+            f"{base}/cn/"
+        ])
+
+
+    # 중복 제거
+    result = []
+
+    seen = set()
+
+    for url in urls:
+
+        if url not in seen:
+
+            seen.add(url)
+
+            result.append(url)
 
     return result
+
+
+def discover_7m_page(
+    target_date=None,
+    cid=""
+):
+
+    candidates = build_candidate_urls(
+        target_date,
+        cid
+    )
+
+    errors = []
+
+    for url in candidates:
+
+        try:
+
+            request = Request(
+                url,
+                headers=DEFAULT_HEADERS
+            )
+
+            with urlopen(
+                request,
+                timeout=15
+            ) as response:
+
+                status = getattr(
+                    response,
+                    "status",
+                    200
+                )
+
+                html = decode_response(
+                    response
+                )
+
+
+            if status == 200 and html:
+
+                # dt가 있는 페이지를 최우선
+                if extract_dt_block(html):
+
+                    return {
+                        "url": url,
+                        "status": status,
+                        "html": html
+                    }
+
+
+                # HTML 자체도 후보
+                if (
+                    "<html" in html.lower()
+                    or "<script" in html.lower()
+                ):
+
+                    return {
+                        "url": url,
+                        "status": status,
+                        "html": html
+                    }
+
+
+        except HTTPError as exc:
+
+            errors.append(
+                f"{url} -> HTTP {exc.code}"
+            )
+
+        except Exception as exc:
+
+            errors.append(
+                f"{url} -> {exc}"
+            )
+
+
+    raise RuntimeError(
+        "7M 페이지를 찾지 못했습니다.\n"
+        + "\n".join(errors[-10:])
+    )
 
 
 # ============================================================
@@ -1462,8 +1569,9 @@ def collect_day(
     if not target:
 
         raise ValueError(
-            "잘못된 수집 날짜"
+            "잘못된 날짜입니다."
         )
+
 
     save_collection_day(
         target,
@@ -1473,64 +1581,129 @@ def collect_day(
         ""
     )
 
-    last_error = ""
 
-    urls = build_candidate_urls(
-        target,
-        cid
+    try:
+
+        discovered = discover_7m_page(
+            target,
+            cid
+        )
+
+        html = discovered["html"]
+
+        result = collect_html(
+            html,
+            target
+        )
+
+        save_collection_day(
+            target,
+            "DONE",
+            result["found"],
+            result["saved"],
+            ""
+        )
+
+        save_collection_state(
+            last_completed_date=
+                target.isoformat(),
+            running=True,
+            stopped=False
+        )
+
+        add_log(
+            f"{target}: "
+            f"발견 {result['found']}건 / "
+            f"신규 저장 {result['saved']}건 / "
+            f"URL {discovered['url']}"
+        )
+
+        return result
+
+
+    except Exception as exc:
+
+        save_collection_day(
+            target,
+            "ERROR",
+            0,
+            0,
+            str(exc)
+        )
+
+        add_log(
+            f"{target} 수집 오류: {exc}",
+            "ERROR"
+        )
+
+        raise
+
+
+# ============================================================
+# COLLECTION URL
+# ============================================================
+
+def collect_url(
+    url,
+    target_date=None
+):
+
+    add_log(
+        f"7M 요청: {url}"
     )
 
-    for url in urls:
+    try:
 
-        try:
+        html = fetch_url(
+            url
+        )
 
-            result = collect_url(
-                url,
-                target
-            )
+    except HTTPError as exc:
 
-            if result["found"] > 0:
+        add_log(
+            f"HTTP 오류: {exc.code}",
+            "ERROR"
+        )
 
-                save_collection_day(
-                    target,
-                    "DONE",
-                    result["found"],
-                    result["saved"],
-                    ""
-                )
+        raise
 
-                return result
+    except URLError as exc:
 
-            # 페이지는 살아있지만 dt가 없는 경우
-            add_log(
-                f"데이터 후보 없음: {url}",
-                "WARNING"
-            )
+        add_log(
+            f"네트워크 오류: {exc}",
+            "ERROR"
+        )
 
-        except Exception as exc:
+        raise
 
-            last_error = str(exc)
+    except Exception as exc:
 
-            add_log(
-                f"URL 실패: {url} / "
-                f"{exc}",
-                "WARNING"
-            )
+        add_log(
+            f"페이지 요청 실패: {exc}",
+            "ERROR"
+        )
 
-    save_collection_day(
-        target,
-        "ERROR",
-        0,
-        0,
-        last_error or "7M 데이터를 찾지 못했습니다."
+        raise
+
+
+    add_log(
+        f"HTML 수신: {len(html):,} bytes"
     )
 
-    raise RuntimeError(
-        last_error
-        or
-        "7M 페이지는 응답했지만 "
-        "경기 데이터(dt)를 찾지 못했습니다."
+
+    result = collect_html(
+        html,
+        target_date
     )
+
+
+    add_log(
+        f"7M 후보 {result['found']}건 / "
+        f"신규 저장 {result['saved']}건"
+    )
+
+
+    return result
 
 
 # ============================================================
@@ -1568,7 +1741,8 @@ def collect_range(
     url=None,
     retry_count=1,
     retry_delay=1.0,
-    stop_event=None
+    stop_event=None,
+    cid=""
 ):
 
     start = normalize_date(
@@ -1591,10 +1765,6 @@ def collect_range(
             "시작 날짜가 종료 날짜보다 늦습니다."
         )
 
-    total_found = 0
-    total_saved = 0
-
-    last_completed = None
 
     save_collection_state(
         start_date=start.isoformat(),
@@ -1603,6 +1773,11 @@ def collect_range(
         running=True,
         stopped=False
     )
+
+
+    total_found = 0
+    total_saved = 0
+
 
     try:
 
@@ -1616,6 +1791,13 @@ def collect_range(
                 and stop_event.is_set()
             ):
 
+                save_collection_state(
+                    start_date=start.isoformat(),
+                    end_date=end.isoformat(),
+                    running=False,
+                    stopped=True
+                )
+
                 add_log(
                     "수집 중지 요청",
                     "WARNING"
@@ -1623,23 +1805,20 @@ def collect_range(
 
                 break
 
+
             success = False
             last_error = ""
+
 
             for attempt in range(
                 retry_count + 1
             ):
 
-                if (
-                    stop_event is not None
-                    and stop_event.is_set()
-                ):
-                    break
-
                 try:
 
                     result = collect_day(
-                        target_date
+                        target_date,
+                        cid
                     )
 
                     total_found += result[
@@ -1654,15 +1833,16 @@ def collect_range(
 
                     break
 
+
                 except Exception as exc:
 
                     last_error = str(exc)
 
                     add_log(
                         f"{target_date} "
-                        f"실패 "
+                        f"수집 실패 "
                         f"({attempt + 1}/"
-                        f"{retry_count + 1}) "
+                        f"{retry_count + 1}): "
                         f"{exc}",
                         "ERROR"
                     )
@@ -1671,25 +1851,10 @@ def collect_range(
 
                         time.sleep(
                             float(retry_delay)
-                            * (2 ** attempt)
                         )
 
-            if success:
 
-                last_completed = (
-                    target_date.isoformat()
-                )
-
-                save_collection_state(
-                    start_date=start.isoformat(),
-                    end_date=end.isoformat(),
-                    last_completed_date=
-                        last_completed,
-                    running=True,
-                    stopped=False
-                )
-
-            else:
+            if not success:
 
                 save_collection_day(
                     target_date,
@@ -1699,25 +1864,28 @@ def collect_range(
                     last_error
                 )
 
+
         return {
             "found": total_found,
             "saved": total_saved
         }
 
+
     finally:
 
-        stopped = (
-            stop_event is not None
-            and stop_event.is_set()
-        )
+        state = get_collection_state()
 
         save_collection_state(
             start_date=start.isoformat(),
             end_date=end.isoformat(),
-            last_completed_date=
-                last_completed,
+            last_completed_date=state.get(
+                "last_completed_date"
+            ),
             running=False,
-            stopped=stopped
+            stopped=state.get(
+                "stopped",
+                False
+            )
         )
 
 
@@ -1725,10 +1893,10 @@ def collect_range(
 # DIAGNOSTIC
 # ============================================================
 
-def diagnose_html(html):
-
-    if html is None:
-        html = ""
+def diagnose_html(
+    html,
+    url=""
+):
 
     dt_block = extract_dt_block(
         html
@@ -1738,41 +1906,34 @@ def diagnose_html(html):
         html
     )
 
-    scripts = re.findall(
-        r'<script[^>]+src=["\']([^"\']+)',
-        html,
-        re.IGNORECASE
-    )
 
     return {
 
-        "html": html,
+        "status": 200,
 
-        "html_size": len(html),
+        "html_size":
+            len(html or ""),
 
-        "size": (
-            len(dt_block)
-            if dt_block
-            else 0
-        ),
-
-        "dt_found":
-            bool(dt_block),
+        "size":
+            len(html or ""),
 
         "found":
             len(rows),
 
-        "candidate_count":
-            len(rows),
-
-        "sample":
-            rows[:5],
-
-        "scripts":
-            scripts,
+        "html":
+            html or "",
 
         "js":
-            "\n".join(scripts[:100])
+            dt_block or "",
+
+        "url":
+            url,
+
+        "js_url":
+            "",
+
+        "error":
+            ""
     }
 
 
@@ -1781,135 +1942,304 @@ def diagnose(
     cid=""
 ):
 
+    """
+    app.py에서 직접 호출하는 통합 진단 함수.
+
+    절대로 HTTP 404 때문에 Streamlit 앱이
+    AttributeError/HTTPError로 종료되지 않게 한다.
+    """
+
     target = normalize_date(
         diagnose_date
     )
 
-    result = {
 
-        "status": 0,
+    if not target:
 
-        "html_size": 0,
+        return {
+            "status": 0,
+            "html_size": 0,
+            "size": 0,
+            "found": 0,
+            "html": "",
+            "js": "",
+            "url": "",
+            "js_url": "",
+            "error": "잘못된 진단 날짜입니다."
+        }
 
-        "size": 0,
 
-        "found": 0,
+    errors = []
 
-        "html": "",
 
-        "js": "",
+    # --------------------------------------------------------
+    # 1. 페이지 자동 탐색
+    # --------------------------------------------------------
 
-        "error": "",
+    try:
 
-        "url": "",
+        discovered = discover_7m_page(
+            target,
+            cid
+        )
 
-        "attempts": []
-    }
+        html = discovered["html"]
 
-    urls = build_candidate_urls(
-        target,
-        cid
-    )
+        page_url = discovered["url"]
 
-    last_error = ""
+        result = diagnose_html(
+            html,
+            page_url
+        )
 
-    for url in urls:
+        result["status"] = (
+            discovered["status"]
+        )
 
-        try:
+        # HTML 내부 script/src에서 JS 후보 추출
+        scripts = re.findall(
+            r'<script[^>]+src=["\']([^"\']+)["\']',
+            html,
+            re.IGNORECASE
+        )
 
-            response = fetch_url(
-                url
-            )
 
-            html = response["html"]
+        js_text = ""
 
-            diagnostic = diagnose_html(
-                html
-            )
+        js_url = ""
 
-            result["attempts"].append({
-                "url": url,
-                "status":
-                    response["status"],
-                "html_size":
-                    response["size"],
-                "dt_found":
-                    diagnostic["dt_found"],
-                "found":
-                    diagnostic["found"]
-            })
 
-            # 성공 응답을 우선 사용
-            if response["status"] == 200:
+        for script in scripts:
 
-                result.update({
-
-                    "status":
-                        response["status"],
-
-                    "html_size":
-                        response["size"],
-
-                    "size":
-                        diagnostic["size"],
-
-                    "found":
-                        diagnostic["found"],
-
-                    "html":
-                        diagnostic["html"],
-
-                    "js":
-                        diagnostic["js"],
-
-                    "url":
-                        response["url"],
-
-                    "error":
-                        ""
-                })
-
-                # 실제 dt가 발견되면 종료
-                if diagnostic["found"] > 0:
-                    return result
-
-                # HTML은 살아있지만 데이터가 없으면
-                # 다음 후보도 확인
+            if (
+                "history" not in script.lower()
+                and "index" not in script.lower()
+            ):
                 continue
 
-        except Exception as exc:
 
-            last_error = str(exc)
+            if script.startswith("//"):
 
-            result["attempts"].append({
-                "url": url,
-                "status": 0,
-                "html_size": 0,
-                "dt_found": False,
-                "found": 0,
-                "error": last_error
-            })
+                js_url = (
+                    "https:"
+                    + script
+                )
 
-    if not result["html"]:
+            elif script.startswith("/"):
 
-        result["error"] = (
-            last_error
-            or
-            "7M 서버에서 유효한 페이지를 "
-            "받지 못했습니다."
+                from urllib.parse import urljoin
+
+                js_url = urljoin(
+                    page_url,
+                    script
+                )
+
+            elif script.startswith("http"):
+
+                js_url = script
+
+            else:
+
+                from urllib.parse import urljoin
+
+                js_url = urljoin(
+                    page_url,
+                    script
+                )
+
+
+            try:
+
+                js_text = fetch_url(
+                    js_url,
+                    timeout=15
+                )
+
+                if js_text:
+                    break
+
+            except Exception as exc:
+
+                errors.append(
+                    f"JS {js_url}: {exc}"
+                )
+
+
+        # dt가 없었고 JS를 찾았으면 JS에서도 검색
+        if not result["found"] and js_text:
+
+            js_dt = extract_dt_block(
+                js_text
+            )
+
+            if js_dt:
+
+                rows = parse_dt_from_html(
+                    js_text
+                )
+
+                result["found"] = len(rows)
+
+                result["js"] = js_text
+
+            else:
+
+                result["js"] = js_text
+
+        else:
+
+            result["js"] = (
+                js_text
+                or result.get("js", "")
+            )
+
+
+        result["js_url"] = js_url
+
+        if errors:
+
+            result["diagnostic_warnings"] = errors
+
+
+        return result
+
+
+    except HTTPError as exc:
+
+        return {
+
+            "status":
+                getattr(
+                    exc,
+                    "code",
+                    0
+                ),
+
+            "html_size":
+                0,
+
+            "size":
+                0,
+
+            "found":
+                0,
+
+            "html":
+                "",
+
+            "js":
+                "",
+
+            "url":
+                getattr(
+                    exc,
+                    "url",
+                    ""
+                ),
+
+            "js_url":
+                "",
+
+            "error":
+                f"HTTP 오류: {exc.code}"
+        }
+
+
+    except URLError as exc:
+
+        return {
+
+            "status":
+                0,
+
+            "html_size":
+                0,
+
+            "size":
+                0,
+
+            "found":
+                0,
+
+            "html":
+                "",
+
+            "js":
+                "",
+
+            "url":
+                "",
+
+            "js_url":
+                "",
+
+            "error":
+                f"네트워크 오류: {exc}"
+        }
+
+
+    except Exception as exc:
+
+        return {
+
+            "status":
+                0,
+
+            "html_size":
+                0,
+
+            "size":
+                0,
+
+            "found":
+                0,
+
+            "html":
+                "",
+
+            "js":
+                "",
+
+            "url":
+                "",
+
+            "js_url":
+                "",
+
+            "error":
+                str(exc)
+        }
+
+
+def diagnose_url(
+    url
+):
+
+    try:
+
+        html = fetch_url(
+            url
         )
 
-    elif result["found"] == 0:
-
-        result["error"] = (
-            "HTTP 200 응답은 받았지만 "
-            "현재 페이지 HTML에서 dt 경기 데이터를 "
-            "찾지 못했습니다. "
-            "7M 데이터가 JavaScript/API로 "
-            "별도 로딩되는 구조일 가능성이 있습니다."
+        return diagnose_html(
+            html,
+            url
         )
 
-    return result
+    except HTTPError as exc:
+
+        return {
+
+            "status": exc.code,
+            "html_size": 0,
+            "size": 0,
+            "found": 0,
+            "html": "",
+            "js": "",
+            "url": url,
+            "js_url": "",
+            "error": f"HTTP 오류: {exc.code}"
+        }
 
 
 # ============================================================
