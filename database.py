@@ -9,11 +9,10 @@ def get_connection():
     conn = sqlite3.connect(
         DB_PATH,
         check_same_thread=False,
-        timeout=30,
+        timeout=30
     )
 
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=30000")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS matches (
@@ -24,7 +23,7 @@ def get_connection():
             home_team TEXT DEFAULT '',
             away_team TEXT DEFAULT '',
 
-            company TEXT DEFAULT '미지정',
+            company TEXT DEFAULT '',
 
             home_odds REAL NOT NULL,
             draw_odds REAL NOT NULL,
@@ -53,44 +52,27 @@ def get_connection():
         )
     """)
 
-    # 기존 DB에 새 컬럼이 없는 경우 자동 추가
-    columns = {
-        row[1]
-        for row in conn.execute(
-            "PRAGMA table_info(matches)"
-        ).fetchall()
-    }
-
-    for name, definition in [
-        ("home_team", "TEXT DEFAULT ''"),
-        ("away_team", "TEXT DEFAULT ''"),
-        ("company", "TEXT DEFAULT '미지정'"),
-    ]:
-        if name not in columns:
-            conn.execute(
-                f"ALTER TABLE matches ADD COLUMN "
-                f"{name} {definition}"
-            )
-
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS collection_days (
-            target_date TEXT PRIMARY KEY,
-            status TEXT NOT NULL,
+        CREATE TABLE IF NOT EXISTS collection_status (
+            id INTEGER PRIMARY KEY CHECK(id = 1),
+
+            start_date TEXT,
+            end_date TEXT,
+            last_date TEXT,
+
+            running INTEGER DEFAULT 0,
+            completed INTEGER DEFAULT 0,
+
             found INTEGER DEFAULT 0,
             saved INTEGER DEFAULT 0,
-            error TEXT DEFAULT '',
+            failed INTEGER DEFAULT 0,
+
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT DEFAULT ''
-        )
-    """)
-
     conn.commit()
+
     return conn
 
 
@@ -110,52 +92,85 @@ def save_match(row):
                 home_team,
                 away_team,
                 company,
+
                 home_odds,
                 draw_odds,
                 away_odds,
+
                 result,
+
                 home_probability,
                 draw_probability,
                 away_probability,
+
                 source
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            row["match_date"],
+            row.get("match_date", ""),
             row.get("league", ""),
             row.get("home_team", ""),
             row.get("away_team", ""),
-            row.get("company", "미지정"),
+            row.get("company", ""),
+
             row["home_odds"],
             row["draw_odds"],
             row["away_odds"],
+
             row["result"],
+
             row["home_probability"],
             row["draw_probability"],
             row["away_probability"],
-            row.get("source", ""),
+
+            row.get("source", "")
         ))
 
         conn.commit()
+
         return cur.rowcount
 
     finally:
         conn.close()
 
 
-def get_count(company=None):
+def save_manual_match(row):
+    return save_match(row)
+
+
+def get_count():
     conn = get_connection()
 
     try:
-        if company and company != "전체":
-            return conn.execute(
-                "SELECT COUNT(*) FROM matches WHERE company=?",
-                (company,),
-            ).fetchone()[0]
-
         return conn.execute(
             "SELECT COUNT(*) FROM matches"
         ).fetchone()[0]
+
+    finally:
+        conn.close()
+
+
+def get_result_counts():
+    conn = get_connection()
+
+    try:
+        rows = conn.execute("""
+            SELECT result, COUNT(*)
+            FROM matches
+            GROUP BY result
+        """).fetchall()
+
+        data = {
+            "H": 0,
+            "D": 0,
+            "A": 0
+        }
+
+        for result, count in rows:
+            if result in data:
+                data[result] = count
+
+        return data
 
     finally:
         conn.close()
@@ -167,29 +182,15 @@ def get_company_counts():
     try:
         return conn.execute("""
             SELECT
-                COALESCE(NULLIF(company, ''), '미지정') AS company,
-                COUNT(*) AS count
+                CASE
+                    WHEN company = '' THEN '미지정'
+                    ELSE company
+                END AS company,
+                COUNT(*)
             FROM matches
             GROUP BY company
-            ORDER BY count DESC
+            ORDER BY COUNT(*) DESC
         """).fetchall()
-
-    finally:
-        conn.close()
-
-
-def get_companies():
-    conn = get_connection()
-
-    try:
-        rows = conn.execute("""
-            SELECT DISTINCT
-                COALESCE(NULLIF(company, ''), '미지정')
-            FROM matches
-            ORDER BY 1
-        """).fetchall()
-
-        return [row[0] for row in rows]
 
     finally:
         conn.close()
@@ -198,207 +199,34 @@ def get_companies():
 def get_same_odds(
     home_odds,
     draw_odds,
-    away_odds,
-    company="전체",
+    away_odds
 ):
     conn = get_connection()
 
     try:
-        if company and company != "전체":
-            return conn.execute("""
-                SELECT result
-                FROM matches
-                WHERE company=?
-                  AND ABS(home_odds - ?) < 0.000001
-                  AND ABS(draw_odds - ?) < 0.000001
-                  AND ABS(away_odds - ?) < 0.000001
-            """, (
-                company,
-                home_odds,
-                draw_odds,
-                away_odds,
-            )).fetchall()
-
         return conn.execute("""
             SELECT result
             FROM matches
-            WHERE ABS(home_odds - ?) < 0.000001
-              AND ABS(draw_odds - ?) < 0.000001
-              AND ABS(away_odds - ?) < 0.000001
+            WHERE home_odds = ?
+              AND draw_odds = ?
+              AND away_odds = ?
         """, (
             home_odds,
             draw_odds,
-            away_odds,
+            away_odds
         )).fetchall()
 
     finally:
         conn.close()
 
 
-def get_result_counts(
-    home_odds=None,
-    draw_odds=None,
-    away_odds=None,
-    company="전체",
-):
-    conn = get_connection()
-
-    try:
-        clauses = []
-        params = []
-
-        if home_odds is not None:
-            clauses.append(
-                "ABS(home_odds - ?) < 0.000001"
-            )
-            params.append(home_odds)
-
-        if draw_odds is not None:
-            clauses.append(
-                "ABS(draw_odds - ?) < 0.000001"
-            )
-            params.append(draw_odds)
-
-        if away_odds is not None:
-            clauses.append(
-                "ABS(away_odds - ?) < 0.000001"
-            )
-            params.append(away_odds)
-
-        if company and company != "전체":
-            clauses.append("company=?")
-            params.append(company)
-
-        where = ""
-        if clauses:
-            where = "WHERE " + " AND ".join(clauses)
-
-        rows = conn.execute(
-            f"""
-            SELECT result, COUNT(*)
-            FROM matches
-            {where}
-            GROUP BY result
-            """,
-            params,
-        ).fetchall()
-
-        result = {
-            "H": 0,
-            "D": 0,
-            "A": 0,
-        }
-
-        for outcome, count in rows:
-            if outcome in result:
-                result[outcome] = count
-
-        result["total"] = sum(result.values())
-
-        return result
-
-    finally:
-        conn.close()
-
-
-def save_collection_day(
-    target_date,
-    status,
-    found=0,
-    saved=0,
-    error="",
-):
-    conn = get_connection()
-
-    try:
-        conn.execute("""
-            INSERT INTO collection_days (
-                target_date,
-                status,
-                found,
-                saved,
-                error,
-                updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(target_date)
-            DO UPDATE SET
-                status=excluded.status,
-                found=excluded.found,
-                saved=excluded.saved,
-                error=excluded.error,
-                updated_at=CURRENT_TIMESTAMP
-        """, (
-            str(target_date),
-            status,
-            found,
-            saved,
-            error or "",
-        ))
-
-        conn.commit()
-
-    finally:
-        conn.close()
-
-
-def get_collection_day(target_date):
+def get_all_matches(limit=5000):
     conn = get_connection()
 
     try:
         return conn.execute("""
             SELECT
-                target_date,
-                status,
-                found,
-                saved,
-                error,
-                updated_at
-            FROM collection_days
-            WHERE target_date=?
-        """, (str(target_date),)).fetchone()
-
-    finally:
-        conn.close()
-
-
-def get_last_completed_date():
-    conn = get_connection()
-
-    try:
-        row = conn.execute("""
-            SELECT MAX(target_date)
-            FROM collection_days
-            WHERE status IN ('success', 'skipped')
-        """).fetchone()
-
-        return row[0] if row else None
-
-    finally:
-        conn.close()
-
-
-def get_failed_days():
-    conn = get_connection()
-
-    try:
-        return conn.execute("""
-            SELECT target_date, error
-            FROM collection_days
-            WHERE status='failed'
-            ORDER BY target_date
-        """).fetchall()
-
-    finally:
-        conn.close()
-
-
-def get_all_matches():
-    conn = get_connection()
-
-    try:
-        return conn.execute("""
-            SELECT
+                id,
                 match_date,
                 league,
                 home_team,
@@ -415,7 +243,136 @@ def get_all_matches():
                 created_at
             FROM matches
             ORDER BY match_date DESC, id DESC
-        """).fetchall()
+            LIMIT ?
+        """, (limit,)).fetchall()
+
+    finally:
+        conn.close()
+
+
+def update_collection_status(
+    start_date=None,
+    end_date=None,
+    last_date=None,
+    running=None,
+    completed=None,
+    found=None,
+    saved=None,
+    failed=None
+):
+    conn = get_connection()
+
+    try:
+        old = conn.execute("""
+            SELECT *
+            FROM collection_status
+            WHERE id = 1
+        """).fetchone()
+
+        if old is None:
+            values = {
+                "start_date": start_date,
+                "end_date": end_date,
+                "last_date": last_date,
+                "running": int(bool(running)),
+                "completed": int(bool(completed)),
+                "found": found or 0,
+                "saved": saved or 0,
+                "failed": failed or 0
+            }
+
+            conn.execute("""
+                INSERT INTO collection_status (
+                    id,
+                    start_date,
+                    end_date,
+                    last_date,
+                    running,
+                    completed,
+                    found,
+                    saved,
+                    failed
+                )
+                VALUES (
+                    1, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+            """, (
+                values["start_date"],
+                values["end_date"],
+                values["last_date"],
+                values["running"],
+                values["completed"],
+                values["found"],
+                values["saved"],
+                values["failed"]
+            ))
+
+        else:
+            conn.execute("""
+                UPDATE collection_status
+                SET
+                    start_date = COALESCE(?, start_date),
+                    end_date = COALESCE(?, end_date),
+                    last_date = COALESCE(?, last_date),
+                    running = COALESCE(?, running),
+                    completed = COALESCE(?, completed),
+                    found = COALESCE(?, found),
+                    saved = COALESCE(?, saved),
+                    failed = COALESCE(?, failed),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = 1
+            """, (
+                start_date,
+                end_date,
+                last_date,
+                None if running is None else int(bool(running)),
+                None if completed is None else int(bool(completed)),
+                found,
+                saved,
+                failed
+            ))
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+
+def get_collection_status():
+    conn = get_connection()
+
+    try:
+        row = conn.execute("""
+            SELECT
+                start_date,
+                end_date,
+                last_date,
+                running,
+                completed,
+                found,
+                saved,
+                failed,
+                updated_at
+            FROM collection_status
+            WHERE id = 1
+        """).fetchone()
+
+        if not row:
+            return {}
+
+        keys = [
+            "start_date",
+            "end_date",
+            "last_date",
+            "running",
+            "completed",
+            "found",
+            "saved",
+            "failed",
+            "updated_at"
+        ]
+
+        return dict(zip(keys, row))
 
     finally:
         conn.close()
