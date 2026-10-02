@@ -1,5 +1,4 @@
 import threading
-
 from datetime import timedelta
 
 import collector
@@ -51,15 +50,10 @@ class CollectorWorker:
         self.stopped = False
 
         self.message = "대기 중"
-
         self.error = ""
 
         self.lock = threading.RLock()
 
-
-    # ========================================================
-    # START
-    # ========================================================
 
     def start(self):
 
@@ -86,24 +80,13 @@ class CollectorWorker:
             return True
 
 
-    # ========================================================
-    # STOP
-    # ========================================================
-
     def stop(self):
 
         self.stop_event.set()
 
         with self.lock:
+            self.message = "중지 요청 중..."
 
-            self.message = (
-                "중지 요청 중..."
-            )
-
-
-    # ========================================================
-    # PROGRESS
-    # ========================================================
 
     def progress(self):
 
@@ -111,15 +94,11 @@ class CollectorWorker:
             return 0.0
 
         return min(
-            self.completed_days
-            / self.total_days,
+            self.completed_days /
+            self.total_days,
             1.0
         )
 
-
-    # ========================================================
-    # RUN
-    # ========================================================
 
     def run(self):
 
@@ -145,93 +124,69 @@ class CollectorWorker:
 
                 if self.stop_event.is_set():
 
-                    with self.lock:
+                    self.stopped = True
 
-                        self.stopped = True
-
-                        self.message = (
-                            "수집 중지됨"
-                        )
+                    self.message = (
+                        "수집 중지됨"
+                    )
 
                     break
 
-                with self.lock:
 
-                    self.message = (
-                        f"{current} 수집 중"
+                self.message = (
+                    f"{current} 수집 중"
+                )
+
+
+                result = self.retry.run(
+                    collector.collect_day,
+                    current,
+                    self.cid
+                )
+
+
+                if result["success"]:
+
+                    value = result["value"]
+
+                    self.found_rows += int(
+                        value.get("found", 0)
                     )
 
-                try:
-
-                    result = self.retry.run(
-                        collector.collect_day,
-                        current,
-                        self.cid
+                    self.saved_rows += int(
+                        value.get("saved", 0)
                     )
 
-                    if not result.get(
-                        "success",
-                        False
-                    ):
-
-                        raise RuntimeError(
-                            result.get(
-                                "error",
-                                "수집 실패"
-                            )
-                        )
-
-                    value = result.get(
-                        "value",
-                        {}
-                    )
-
-                    found = int(
-                        value.get(
-                            "found",
-                            0
-                        )
-                    )
-
-                    saved = int(
-                        value.get(
-                            "saved",
-                            0
-                        )
-                    )
-
-                    with self.lock:
-
-                        self.found_rows += found
-                        self.saved_rows += saved
-                        self.success_days += 1
+                    self.success_days += 1
 
                     database.add_log(
                         f"{current}: "
-                        f"발견 {found}, "
-                        f"신규 {saved}"
+                        f"발견 "
+                        f"{value.get('found', 0)}, "
+                        f"신규 "
+                        f"{value.get('saved', 0)}"
                     )
 
-                except Exception as exc:
+                else:
 
-                    with self.lock:
+                    self.failed_days += 1
 
-                        self.failed_days += 1
+                    error = result.get(
+                        "error",
+                        "알 수 없는 오류"
+                    )
 
                     database.add_log(
                         f"{current}: "
-                        f"최종 실패 → 건너뛰기: "
-                        f"{exc}",
+                        f"재시도 실패 → 건너뛰기: "
+                        f"{error}",
                         "ERROR"
                     )
 
-                with self.lock:
 
-                    self.completed_days += 1
+                self.completed_days += 1
+                self.last_completed_date = current
 
-                    self.last_completed_date = (
-                        current
-                    )
 
                 database.save_collection_state(
                     start_date=self.start_date,
@@ -241,59 +196,52 @@ class CollectorWorker:
                     stopped=False
                 )
 
-                current += timedelta(
-                    days=1
-                )
 
-            with self.lock:
+                current += timedelta(days=1)
 
-                if self.stopped:
 
-                    self.message = (
-                        "수집 중지됨"
-                    )
-
-                else:
-
-                    self.message = (
-                        "수집 완료"
-                    )
-
-        except Exception as exc:
-
-            with self.lock:
-
-                self.error = str(exc)
+            if self.stopped:
 
                 self.message = (
-                    "수집 오류"
+                    "수집 중지됨"
                 )
 
+            else:
+
+                self.message = (
+                    "수집 완료"
+                )
+
+
+        except Exception as error:
+
+            self.error = str(error)
+
+            self.message = (
+                "수집 오류"
+            )
+
             database.add_log(
-                f"Worker 오류: {exc}",
+                f"Worker 오류: {error}",
                 "ERROR"
             )
 
+
         finally:
 
-            with self.lock:
-
-                self.running = False
-                self.finished = True
+            self.running = False
+            self.finished = True
 
             database.save_collection_state(
                 start_date=self.start_date,
                 end_date=self.end_date,
-                last_completed_date=
-                    self.last_completed_date,
+                last_completed_date=(
+                    self.last_completed_date
+                ),
                 running=False,
                 stopped=self.stopped
             )
 
-
-    # ========================================================
-    # STATUS
-    # ========================================================
 
     def status(self):
 
@@ -339,4 +287,4 @@ class CollectorWorker:
 
                 "error":
                     self.error
-            }
+        }
