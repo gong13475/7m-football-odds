@@ -1,13 +1,16 @@
 import re
 import time
 import requests
-from bs4 import BeautifulSoup
 
 from database import save_match
-from retry_manager import retry
 
 
 BASE_URL = "https://1x2.7mkr.com/result_kr.shtml"
+
+DATA_BASE = (
+    "https://px-1x2.7mdt.com/"
+    "data/history/kr"
+)
 
 HEADERS = {
     "User-Agent": (
@@ -15,253 +18,234 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/131.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8"
+    "Accept": "*/*",
+    "Accept-Language": "ko-KR,ko;q=0.9"
 }
 
 
 def download_day(target_date, cid=""):
 
-    params = {
-        "dt": target_date.strftime("%Y-%m-%d")
-    }
+    dt = target_date.strftime("%Y-%m-%d")
 
-    if cid:
-        params["cid"] = cid
+    filename = (
+        cid if cid else "index"
+    )
+
+    url = (
+        f"{DATA_BASE}/"
+        f"{dt}/"
+        f"{filename}.js"
+    )
 
     response = requests.get(
-        BASE_URL,
-        params=params,
+        url,
         headers=HEADERS,
         timeout=30
     )
 
     response.raise_for_status()
 
-    response.encoding = response.apparent_encoding or "utf-8"
-
-    time.sleep(1)
+    response.encoding = (
+        response.apparent_encoding
+        or "utf-8"
+    )
 
     return response.text
 
 
-def clean(text):
+def extract_matches(js):
 
-    return re.sub(
-        r"\s+",
-        " ",
-        str(text)
-    ).strip()
+    """
+    7M의 history JS에서
+    경기/배당 숫자를 최대한 안전하게 추출한다.
 
-
-def result_code(score):
-
-    match = re.search(
-        r"(\d+)\s*-\s*(\d+)",
-        score or ""
-    )
-
-    if not match:
-        return None
-
-    home = int(match.group(1))
-    away = int(match.group(2))
-
-    if home > away:
-        return "H"
-
-    if home < away:
-        return "A"
-
-    return "D"
-
-
-def probability(odds):
-
-    try:
-
-        odds = float(odds)
-
-        if odds <= 0:
-            return 0.0
-
-        return round(
-            100 / odds,
-            2
-        )
-
-    except Exception:
-
-        return 0.0
-
-
-def extract_odds(text):
-
-    numbers = re.findall(
-        r"(?<![\d.])\d+(?:\.\d+)?",
-        text
-    )
-
-    if len(numbers) < 3:
-        return None
-
-    try:
-
-        values = [
-            float(x)
-            for x in numbers[:3]
-        ]
-
-        if all(
-            value > 1
-            for value in values
-        ):
-            return tuple(values)
-
-    except Exception:
-        pass
-
-    return None
-
-
-def parse_page(html, target_date):
-
-    soup = BeautifulSoup(
-        html,
-        "html.parser"
-    )
-
-    text = soup.get_text(
-        "\n"
-    )
-
-    lines = [
-        clean(line)
-        for line in text.splitlines()
-        if clean(line)
-    ]
+    실제 JS 구조가 확인되면 이 부분을
+    구조에 맞춰 세분화할 수 있다.
+    """
 
     results = []
 
-    for i, line in enumerate(lines):
+    # JS 문자열 안에 있는
+    # 경기 결과 후보
+    score_pattern = re.compile(
+        r"(\d+)\s*-\s*(\d+)"
+    )
 
-        score_match = re.search(
-            r"(\d+)\s*-\s*(\d+)",
-            line
+    scores = list(
+        score_pattern.finditer(js)
+    )
+
+    for match in scores:
+
+        home_score = int(
+            match.group(1)
         )
 
-        if not score_match:
-            continue
+        away_score = int(
+            match.group(2)
+        )
 
-        score = score_match.group(0)
+        if home_score > away_score:
+            result = "H"
 
-        result = result_code(score)
+        elif home_score < away_score:
+            result = "A"
 
-        if not result:
-            continue
+        else:
+            result = "D"
 
+        # 경기 앞뒤 영역
         start = max(
             0,
-            i - 20
+            match.start() - 3000
         )
 
         end = min(
-            len(lines),
-            i + 20
+            len(js),
+            match.end() + 3000
         )
 
-        block = lines[
+        block = js[
             start:end
         ]
 
-        odds = None
+        # 배당 후보
+        odds = re.findall(
+            r"(?<![\d.])"
+            r"([1-9]\d*(?:\.\d+)?)"
+            r"(?![\d.])",
+            block
+        )
 
-        for item in block:
+        numbers = []
 
-            candidate = extract_odds(
-                item
-            )
+        for value in odds:
 
-            if candidate:
+            try:
 
-                odds = candidate
-                break
+                number = float(value)
 
-        if not odds:
+                if (
+                    1.01
+                    <= number
+                    <= 100
+                ):
+                    numbers.append(
+                        number
+                    )
+
+            except ValueError:
+                continue
+
+        # 서로 다른 3개 배당 후보
+        if len(numbers) < 3:
             continue
 
-        home_odds = odds[0]
-        draw_odds = odds[1]
-        away_odds = odds[2]
+        found = None
+
+        for i in range(
+            len(numbers) - 2
+        ):
+
+            candidate = numbers[
+                i:i + 3
+            ]
+
+            if all(
+                x > 1
+                for x in candidate
+            ):
+
+                found = candidate
+                break
+
+        if found is None:
+            continue
 
         results.append({
-
-            "match_date":
-                target_date.isoformat(),
-
-            "league":
-                "",
-
-            "home_odds":
-                home_odds,
-
-            "draw_odds":
-                draw_odds,
-
-            "away_odds":
-                away_odds,
-
-            "result":
-                result,
-
-            "home_probability":
-                probability(
-                    home_odds
-                ),
-
-            "draw_probability":
-                probability(
-                    draw_odds
-                ),
-
-            "away_probability":
-                probability(
-                    away_odds
-                ),
-
-            "source":
-                BASE_URL
+            "home_odds": found[0],
+            "draw_odds": found[1],
+            "away_odds": found[2],
+            "result": result
         })
 
     return results
 
 
-def collect_day(target_date, cid=""):
+def collect_day(
+    target_date,
+    cid=""
+):
 
     try:
 
-        html = download_day(
+        js = download_day(
             target_date,
             cid
         )
 
-        rows = parse_page(
-            html,
-            target_date
+        rows = extract_matches(
+            js
         )
 
         saved = 0
 
         for row in rows:
 
+            data = {
+                "match_date":
+                    target_date.isoformat(),
+
+                "league":
+                    "",
+
+                "home_odds":
+                    row["home_odds"],
+
+                "draw_odds":
+                    row["draw_odds"],
+
+                "away_odds":
+                    row["away_odds"],
+
+                "result":
+                    row["result"],
+
+                "home_probability":
+                    round(
+                        100 /
+                        row["home_odds"],
+                        2
+                    ),
+
+                "draw_probability":
+                    round(
+                        100 /
+                        row["draw_odds"],
+                        2
+                    ),
+
+                "away_probability":
+                    round(
+                        100 /
+                        row["away_odds"],
+                        2
+                    ),
+
+                "source":
+                    DATA_BASE
+            }
+
             try:
 
-                result = save_match(
-                    row
+                value = save_match(
+                    data
                 )
 
-                if result:
-                    saved += int(result)
+                if value:
+                    saved += int(
+                        value
+                    )
 
             except Exception:
                 continue
@@ -283,43 +267,40 @@ def collect_day(target_date, cid=""):
         }
 
 
-def diagnose(target_date, cid=""):
+def diagnose(
+    target_date,
+    cid=""
+):
 
     try:
 
-        html = download_day(
+        js = download_day(
             target_date,
             cid
         )
 
+        rows = extract_matches(
+            js
+        )
+
         return {
-
             "status": 200,
-
-            "size": len(html),
-
-            "has_result":
-                "result_kr" in html,
-
+            "size": len(js),
+            "has_result": True,
             "has_compare":
-                "비교" in html,
-
-            "html":
-                html[:10000]
+                "비교" in js,
+            "found": len(rows),
+            "html": js[:10000]
         }
 
     except Exception as error:
 
         return {
-
             "status": 0,
-
             "size": 0,
-
             "has_result": False,
-
             "has_compare": False,
-
+            "found": 0,
             "html":
                 f"ERROR: {error}"
         }
