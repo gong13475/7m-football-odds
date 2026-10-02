@@ -27,19 +27,30 @@ def normalized_probabilities(
 ):
 
     values = [
+
         implied_probability(home),
         implied_probability(draw),
         implied_probability(away)
+
     ]
 
     total = sum(values)
 
     if total <= 0:
-        return [0.0, 0.0, 0.0]
+
+        return [
+            0.0,
+            0.0,
+            0.0
+        ]
+
 
     return [
+
         value / total * 100
+
         for value in values
+
     ]
 
 
@@ -60,32 +71,37 @@ def calculate_statistics(rows):
 
     total = len(rows)
 
+
     counts = Counter(
-        row.get(
-            "result"
-        )
+        row.get("result")
         for row in rows
     )
+
 
     if total == 0:
 
         return {
+
             "total": 0,
+
             "counts": {
                 "H": 0,
                 "D": 0,
                 "A": 0
             },
+
             "actual": {
                 "H": 0.0,
                 "D": 0.0,
                 "A": 0.0
             },
+
             "expected": {
                 "H": 0.0,
                 "D": 0.0,
                 "A": 0.0
             },
+
             "difference": {
                 "H": 0.0,
                 "D": 0.0,
@@ -94,25 +110,32 @@ def calculate_statistics(rows):
         }
 
 
-    actual = {}
+    actual = {
 
-    for key in ["H", "D", "A"]:
-
-        actual[key] = (
+        key:
             counts.get(key, 0)
             / total
             * 100
-        )
+
+        for key in [
+            "H",
+            "D",
+            "A"
+        ]
+    }
 
 
     expected_values = []
 
+
     for row in rows:
 
         probs = normalized_probabilities(
+
             row["home_odds"],
             row["draw_odds"],
             row["away_odds"]
+
         )
 
         expected_values.append(
@@ -192,17 +215,31 @@ def calculate_company_analysis(
     if not results:
         return None
 
+
     stats = calculate_statistics(
         results
     )
 
+
     return {
-        "company": company,
-        "total": stats["total"],
-        "counts": stats["counts"],
-        "actual": stats["actual"],
-        "expected": stats["expected"],
-        "difference": stats["difference"]
+
+        "company":
+            company,
+
+        "total":
+            stats["total"],
+
+        "counts":
+            stats["counts"],
+
+        "actual":
+            stats["actual"],
+
+        "expected":
+            stats["expected"],
+
+        "difference":
+            stats["difference"]
     }
 
 
@@ -214,30 +251,65 @@ def run_search(
 
     try:
 
+        home = float(home)
+        draw = float(draw)
+        away = float(away)
+
+
+        if (
+            home <= 1.0
+            or draw <= 1.0
+            or away <= 1.0
+        ):
+
+            raise ValueError(
+                "배당은 모두 1.01 이상이어야 합니다."
+            )
+
+
         rows = search_same_odds(
-            float(home),
-            float(draw),
-            float(away)
+            home,
+            draw,
+            away
         )
+
 
         stats = calculate_statistics(
             rows
         )
 
+
         return {
-            "success": True,
-            "message": "검색 완료",
-            "results": rows,
-            "statistics": stats
+
+            "success":
+                True,
+
+            "message":
+                "검색 완료",
+
+            "results":
+                rows,
+
+            "statistics":
+                stats
         }
+
 
     except Exception as error:
 
         return {
-            "success": False,
-            "message": str(error),
-            "results": [],
-            "statistics": {}
+
+            "success":
+                False,
+
+            "message":
+                str(error),
+
+            "results":
+                [],
+
+            "statistics":
+                {}
         }
 
 
