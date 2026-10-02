@@ -173,3 +173,153 @@ def parse_page(html, target_date):
         block = lines[
             start:end
         ]
+
+        odds = None
+
+        for item in block:
+
+            candidate = extract_odds(
+                item
+            )
+
+            if candidate:
+
+                odds = candidate
+                break
+
+        if not odds:
+            continue
+
+        home_odds = odds[0]
+        draw_odds = odds[1]
+        away_odds = odds[2]
+
+        results.append({
+
+            "match_date":
+                target_date.isoformat(),
+
+            "league":
+                "",
+
+            "home_odds":
+                home_odds,
+
+            "draw_odds":
+                draw_odds,
+
+            "away_odds":
+                away_odds,
+
+            "result":
+                result,
+
+            "home_probability":
+                probability(
+                    home_odds
+                ),
+
+            "draw_probability":
+                probability(
+                    draw_odds
+                ),
+
+            "away_probability":
+                probability(
+                    away_odds
+                ),
+
+            "source":
+                BASE_URL
+        })
+
+    return results
+
+
+def collect_day(target_date, cid=""):
+
+    try:
+
+        html = download_day(
+            target_date,
+            cid
+        )
+
+        rows = parse_page(
+            html,
+            target_date
+        )
+
+        saved = 0
+
+        for row in rows:
+
+            try:
+
+                result = save_match(
+                    row
+                )
+
+                if result:
+                    saved += int(result)
+
+            except Exception:
+                continue
+
+        return {
+            "success": True,
+            "found": len(rows),
+            "saved": saved,
+            "error": None
+        }
+
+    except Exception as error:
+
+        return {
+            "success": False,
+            "found": 0,
+            "saved": 0,
+            "error": str(error)
+        }
+
+
+def diagnose(target_date, cid=""):
+
+    try:
+
+        html = download_day(
+            target_date,
+            cid
+        )
+
+        return {
+
+            "status": 200,
+
+            "size": len(html),
+
+            "has_result":
+                "result_kr" in html,
+
+            "has_compare":
+                "비교" in html,
+
+            "html":
+                html[:10000]
+        }
+
+    except Exception as error:
+
+        return {
+
+            "status": 0,
+
+            "size": 0,
+
+            "has_result": False,
+
+            "has_compare": False,
+
+            "html":
+                f"ERROR: {error}"
+        }
