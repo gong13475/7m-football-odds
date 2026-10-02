@@ -1,79 +1,135 @@
-import time
-from datetime import date, timedelta
+import threading
+from datetime import timedelta
 
-from retry_manager import run_with_retry
+from collector import collect_day
 
 
-class CollectionWorker:
+class CollectorWorker:
 
-    def __init__(self):
-        self.running = False
-        self.total = 0
-        self.success = 0
-        self.failed = 0
-        self.skipped = 0
-
-    def start(
+    def __init__(
         self,
-        start_date: date,
-        end_date: date,
-        companies: list
+        start_date,
+        end_date,
+        cid=""
     ):
-        self.running = True
+        self.start_date = start_date
+        self.end_date = end_date
+        self.cid = cid
 
-        current = start_date
+        self.stop_event = threading.Event()
 
-        while self.running and current <= end_date:
+        self.thread = None
 
-            for company in companies:
+        self.total_days = (
+            end_date - start_date
+        ).days + 1
 
-                if not self.running:
-                    break
+        self.completed_days = 0
+        self.success_days = 0
+        self.failed_days = 0
 
-                success, result, error = run_with_retry(
-                    lambda: self.collect_day(
-                        current,
-                        company
-                    ),
-                    max_retries=3
-                )
+        self.found_rows = 0
+        self.saved_rows = 0
 
-                self.total += 1
-
-                if success:
-                    self.success += 1
-                else:
-                    self.failed += 1
-                    self.skipped += 1
-
-            current += timedelta(days=1)
-
-    def stop(self):
         self.running = False
+        self.message = "대기 중"
 
-    def collect_day(
-        self,
-        target_date: date,
-        company: str
-    ):
-        """
-        실제 7M 데이터 수집 모듈을 연결하는 부분입니다.
+    def start(self):
 
-        현재는 임의의 데이터를 생성하지 않습니다.
-        실제 허용된 데이터 소스 연결 후 이 함수에서
-        최종배당 자료를 반환하도록 연결합니다.
-        """
+        if self.running:
+            return
 
-        raise NotImplementedError(
-            "실제 데이터 소스 연결이 필요합니다."
+        self.thread = threading.Thread(
+            target=self.run,
+            daemon=True
         )
 
+        self.thread.start()
 
-if __name__ == "__main__":
-    worker = CollectionWorker()
+    def stop(self):
 
-    worker.start(
-        date(2010, 1, 1),
-        date(2010, 1, 2),
-        ["10Bet"]
-    )
+        self.stop_event.set()
+
+        self.message = (
+            "중지 요청"
+        )
+
+    def progress(self):
+
+        if self.total_days <= 0:
+            return 0.0
+
+        return min(
+            self.completed_days /
+            self.total_days,
+            1.0
+        )
+
+    def run(self):
+
+        self.running = True
+        self.message = "수집 중"
+
+        current = self.start_date
+
+        try:
+
+            while (
+                current <= self.end_date
+                and not self.stop_event.is_set()
+            ):
+
+                result = collect_day(
+                    current,
+                    self.cid
+                )
+
+                if result["success"]:
+
+                    self.success_days += 1
+
+                    self.found_rows += (
+                        result.get(
+                            "found",
+                            0
+                        )
+                    )
+
+                    self.saved_rows += (
+                        result.get(
+                            "saved",
+                            0
+                        )
+                    )
+
+                else:
+
+                    self.failed_days += 1
+
+                self.completed_days += 1
+
+                current += timedelta(
+                    days=1
+                )
+
+            if self.stop_event.is_set():
+
+                self.message = (
+                    "사용자에 의해 중지됨"
+                )
+
+            else:
+
+                self.message = (
+                    "수집 완료"
+                )
+
+        except Exception as error:
+
+            self.message = (
+                f"오류: {error}"
+            )
+
+        finally:
+
+            self.running = False
