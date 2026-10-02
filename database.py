@@ -1,253 +1,244 @@
 import sqlite3
+import threading
 from pathlib import Path
 from datetime import datetime
 
 
 DB_PATH = Path("odds.db")
 
+_db_lock = threading.RLock()
 
-# =========================================================
-# DB 연결
-# =========================================================
 
 def get_connection():
     conn = sqlite3.connect(
         DB_PATH,
-        check_same_thread=False,
-        timeout=30
+        timeout=30,
+        check_same_thread=False
     )
 
     conn.row_factory = sqlite3.Row
 
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+
     return conn
 
 
-# =========================================================
-# DB 초기화
-# =========================================================
+def init_db():
+    with _db_lock:
 
-def init_database():
+        conn = get_connection()
 
-    conn = get_connection()
+        try:
 
-    try:
-
-        conn.execute("""
+            conn.executescript("""
             CREATE TABLE IF NOT EXISTS matches (
-
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
 
-                schedule_id TEXT NOT NULL UNIQUE,
+                match_key TEXT NOT NULL UNIQUE,
 
-                match_date TEXT DEFAULT '',
+                match_date TEXT NOT NULL,
 
                 league TEXT DEFAULT '',
 
                 home_team TEXT DEFAULT '',
-
                 away_team TEXT DEFAULT '',
 
                 home_score INTEGER,
-
                 away_score INTEGER,
 
-                result TEXT DEFAULT '',
+                result TEXT NOT NULL,
+
+                home_odds REAL NOT NULL,
+                draw_odds REAL NOT NULL,
+                away_odds REAL NOT NULL,
+
+                home_probability REAL NOT NULL,
+                draw_probability REAL NOT NULL,
+                away_probability REAL NOT NULL,
 
                 source TEXT DEFAULT '',
 
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+            );
 
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS odds (
+            CREATE INDEX IF NOT EXISTS idx_matches_date
+            ON matches(match_date);
 
+            CREATE INDEX IF NOT EXISTS idx_matches_odds
+            ON matches(
+                home_odds,
+                draw_odds,
+                away_odds
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_matches_result
+            ON matches(result);
+
+            CREATE TABLE IF NOT EXISTS collection_days (
+                match_date TEXT PRIMARY KEY,
+
+                status TEXT NOT NULL,
+
+                found INTEGER DEFAULT 0,
+
+                saved INTEGER DEFAULT 0,
+
+                error TEXT DEFAULT '',
+
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS collection_state (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+
+                start_date TEXT,
+
+                end_date TEXT,
+
+                last_completed_date TEXT,
+
+                running INTEGER DEFAULT 0,
+
+                stopped INTEGER DEFAULT 0,
+
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS collection_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-                schedule_id TEXT NOT NULL,
-
-                company_name TEXT NOT NULL,
-
-                final_home REAL NOT NULL,
-
-                final_draw REAL NOT NULL,
-
-                final_away REAL NOT NULL,
 
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
 
-                UNIQUE(
-                    schedule_id,
-                    company_name
-                )
-            )
-        """)
+                level TEXT DEFAULT 'INFO',
 
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS
-            idx_odds_company
-            ON odds(company_name)
-        """)
+                message TEXT NOT NULL
+            );
+            """)
 
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS
-            idx_odds_values
-            ON odds(
-                final_home,
-                final_draw,
-                final_away
-            )
-        """)
+            conn.commit()
 
-        conn.commit()
+        finally:
 
-    finally:
+            conn.close()
 
-        conn.close()
-
-
-# =========================================================
-# 하위 호환
-# =========================================================
-
-def init_db():
-    init_database()
-
-
-# =========================================================
-# 경기 저장
-# =========================================================
 
 def save_match(row):
 
-    conn = get_connection()
+    match_key = row.get("match_key")
 
-    try:
+    if not match_key:
 
-        schedule_id = str(
-            row.get("schedule_id", "")
-        ).strip()
+        match_key = "|".join([
+            str(row.get("match_date", "")),
+            str(row.get("home_team", "")),
+            str(row.get("away_team", "")),
+            str(row.get("home_odds", "")),
+            str(row.get("draw_odds", "")),
+            str(row.get("away_odds", "")),
+            str(row.get("result", ""))
+        ])
 
-        if not schedule_id:
-            return False
+    with _db_lock:
 
-        cur = conn.execute("""
-            INSERT OR IGNORE INTO matches (
-                schedule_id,
-                match_date,
-                league,
-                home_team,
-                away_team,
-                home_score,
-                away_score,
-                result,
-                source
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            schedule_id,
-            row.get("match_date", ""),
-            row.get("league", ""),
-            row.get("home_team", ""),
-            row.get("away_team", ""),
-            row.get("home_score"),
-            row.get("away_score"),
-            row.get("result", ""),
-            row.get("source", "")
-        ))
-
-        conn.commit()
-
-        return cur.rowcount > 0
-
-    finally:
-
-        conn.close()
-
-
-# =========================================================
-# 배당 저장
-# =========================================================
-
-def save_odds(
-    schedule_id,
-    company_name,
-    final_home,
-    final_draw,
-    final_away
-):
-
-    conn = get_connection()
-
-    try:
-
-        cur = conn.execute("""
-            INSERT OR IGNORE INTO odds (
-                schedule_id,
-                company_name,
-                final_home,
-                final_draw,
-                final_away
-            )
-            VALUES (?, ?, ?, ?, ?)
-        """, (
-            str(schedule_id),
-            str(company_name),
-            float(final_home),
-            float(final_draw),
-            float(final_away)
-        ))
-
-        conn.commit()
-
-        return cur.rowcount > 0
-
-    finally:
-
-        conn.close()
-
-
-# =========================================================
-# 경기 + 배당 한번에 저장
-# =========================================================
-
-def save_match_with_odds(
-    match,
-    company_odds
-):
-
-    saved_match = save_match(match)
-
-    saved_odds = 0
-
-    for company, odds in (
-        company_odds or {}
-    ).items():
+        conn = get_connection()
 
         try:
 
-            if save_odds(
-                match["schedule_id"],
-                company,
-                odds["home"],
-                odds["draw"],
-                odds["away"]
-            ):
+            cur = conn.execute("""
+                INSERT OR IGNORE INTO matches (
+                    match_key,
+                    match_date,
+                    league,
+                    home_team,
+                    away_team,
+                    home_score,
+                    away_score,
+                    result,
+                    home_odds,
+                    draw_odds,
+                    away_odds,
+                    home_probability,
+                    draw_probability,
+                    away_probability,
+                    source
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
 
-                saved_odds += 1
+                match_key,
 
-        except Exception:
-            continue
+                row.get(
+                    "match_date",
+                    ""
+                ),
 
-    return {
-        "match_saved": saved_match,
-        "odds_saved": saved_odds
-    }
+                row.get(
+                    "league",
+                    ""
+                ),
 
+                row.get(
+                    "home_team",
+                    ""
+                ),
 
-# =========================================================
-# 경기 수
-# =========================================================
+                row.get(
+                    "away_team",
+                    ""
+                ),
+
+                row.get(
+                    "home_score"
+                ),
+
+                row.get(
+                    "away_score"
+                ),
+
+                row.get(
+                    "result",
+                    "D"
+                ),
+
+                float(
+                    row["home_odds"]
+                ),
+
+                float(
+                    row["draw_odds"]
+                ),
+
+                float(
+                    row["away_odds"]
+                ),
+
+                float(
+                    row["home_probability"]
+                ),
+
+                float(
+                    row["draw_probability"]
+                ),
+
+                float(
+                    row["away_probability"]
+                ),
+
+                row.get(
+                    "source",
+                    "7M"
+                )
+            ))
+
+            conn.commit()
+
+            return cur.rowcount
+
+        finally:
+
+            conn.close()
+
 
 def get_match_count():
 
@@ -264,55 +255,10 @@ def get_match_count():
         conn.close()
 
 
-# =========================================================
-# 배당 수
-# =========================================================
-
 def get_odds_count():
 
-    conn = get_connection()
+    return get_match_count()
 
-    try:
-
-        return conn.execute(
-            "SELECT COUNT(*) FROM odds"
-        ).fetchone()[0]
-
-    finally:
-
-        conn.close()
-
-
-# =========================================================
-# 업체 목록
-# =========================================================
-
-def get_company_names():
-
-    conn = get_connection()
-
-    try:
-
-        rows = conn.execute("""
-            SELECT DISTINCT company_name
-            FROM odds
-            WHERE company_name <> ''
-            ORDER BY company_name
-        """).fetchall()
-
-        return [
-            row["company_name"]
-            for row in rows
-        ]
-
-    finally:
-
-        conn.close()
-
-
-# =========================================================
-# 전체 경기
-# =========================================================
 
 def get_all_matches():
 
@@ -323,9 +269,7 @@ def get_all_matches():
         rows = conn.execute("""
             SELECT *
             FROM matches
-            ORDER BY
-                match_date DESC,
-                id DESC
+            ORDER BY match_date DESC, id DESC
         """).fetchall()
 
         return [
@@ -337,10 +281,6 @@ def get_all_matches():
 
         conn.close()
 
-
-# =========================================================
-# 전체 배당
-# =========================================================
 
 def get_all_odds():
 
@@ -349,11 +289,17 @@ def get_all_odds():
     try:
 
         rows = conn.execute("""
-            SELECT *
-            FROM odds
-            ORDER BY
-                schedule_id DESC,
-                company_name
+            SELECT
+                match_key,
+                match_date,
+                home_team,
+                away_team,
+                home_odds AS final_home,
+                draw_odds AS final_draw,
+                away_odds AS final_away,
+                result
+            FROM matches
+            ORDER BY match_date DESC, id DESC
         """).fetchall()
 
         return [
@@ -366,41 +312,224 @@ def get_all_odds():
         conn.close()
 
 
-# =========================================================
-# 업체별 저장량
-# =========================================================
+def get_company_names():
+
+    # 현재 7M 전용 구조에서는
+    # 업체명이 별도 테이블로 들어오지 않는 구형 DB도 지원한다.
+    return ["7M"] if get_match_count() else []
+
 
 def get_company_counts():
+
+    count = get_match_count()
+
+    if not count:
+        return {}
+
+    return {
+        "7M": count
+    }
+
+
+def get_same_odds(
+    home_odds,
+    draw_odds,
+    away_odds,
+    tolerance=0.00001
+):
 
     conn = get_connection()
 
     try:
 
         rows = conn.execute("""
-            SELECT
-                company_name,
-                COUNT(*) AS cnt
-            FROM odds
-            GROUP BY company_name
-            ORDER BY cnt DESC
-        """).fetchall()
+            SELECT *
+            FROM matches
+            WHERE ABS(home_odds - ?) < ?
+              AND ABS(draw_odds - ?) < ?
+              AND ABS(away_odds - ? ) < ?
+            ORDER BY match_date DESC
+        """, (
 
-        return {
-            row["company_name"]:
-                row["cnt"]
+            home_odds,
+            tolerance,
+
+            draw_odds,
+            tolerance,
+
+            away_odds,
+            tolerance
+        )).fetchall()
+
+        return [
+            dict(row)
             for row in rows
-        }
+        ]
 
     finally:
 
         conn.close()
 
 
-# =========================================================
-# 특정 경기
-# =========================================================
+def get_result_counts(rows=None):
 
-def get_match(schedule_id):
+    if rows is None:
+
+        conn = get_connection()
+
+        try:
+
+            rows = conn.execute("""
+                SELECT result
+                FROM matches
+            """).fetchall()
+
+        finally:
+
+            conn.close()
+
+    counts = {
+        "H": 0,
+        "D": 0,
+        "A": 0
+    }
+
+    for row in rows:
+
+        result = (
+            row["result"]
+            if isinstance(row, sqlite3.Row)
+            else row.get("result")
+        )
+
+        if result in counts:
+            counts[result] += 1
+
+    counts["total"] = sum(
+        counts.values()
+    )
+
+    return counts
+
+
+def save_collection_day(
+    target_date,
+    status,
+    found=0,
+    saved=0,
+    error=""
+):
+
+    with _db_lock:
+
+        conn = get_connection()
+
+        try:
+
+            conn.execute("""
+                INSERT INTO collection_days (
+                    match_date,
+                    status,
+                    found,
+                    saved,
+                    error,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+
+                ON CONFLICT(match_date)
+                DO UPDATE SET
+                    status=excluded.status,
+                    found=excluded.found,
+                    saved=excluded.saved,
+                    error=excluded.error,
+                    updated_at=CURRENT_TIMESTAMP
+            """, (
+
+                target_date.isoformat()
+                if hasattr(
+                    target_date,
+                    "isoformat"
+                )
+                else str(target_date),
+
+                status,
+
+                int(found),
+
+                int(saved),
+
+                str(error or "")
+            ))
+
+            conn.commit()
+
+        finally:
+
+            conn.close()
+
+
+def save_collection_state(
+    start_date=None,
+    end_date=None,
+    last_completed_date=None,
+    running=False,
+    stopped=False
+):
+
+    with _db_lock:
+
+        conn = get_connection()
+
+        try:
+
+            conn.execute("""
+                INSERT INTO collection_state (
+                    id,
+                    start_date,
+                    end_date,
+                    last_completed_date,
+                    running,
+                    stopped
+                )
+                VALUES (
+                    1, ?, ?, ?, ?, ?
+                )
+
+                ON CONFLICT(id)
+                DO UPDATE SET
+                    start_date=excluded.start_date,
+                    end_date=excluded.end_date,
+                    last_completed_date=
+                        excluded.last_completed_date,
+                    running=excluded.running,
+                    stopped=excluded.stopped,
+                    updated_at=CURRENT_TIMESTAMP
+            """, (
+
+                str(start_date)
+                if start_date else None,
+
+                str(end_date)
+                if end_date else None,
+
+                str(last_completed_date)
+                if last_completed_date
+                else None,
+
+                int(bool(running)),
+
+                int(bool(stopped))
+            ))
+
+            conn.commit()
+
+        finally:
+
+            conn.close()
+
+
+def get_collection_state():
 
     conn = get_connection()
 
@@ -408,16 +537,14 @@ def get_match(schedule_id):
 
         row = conn.execute("""
             SELECT *
-            FROM matches
-            WHERE schedule_id = ?
-        """, (
-            str(schedule_id),
-        )).fetchone()
+            FROM collection_state
+            WHERE id = 1
+        """).fetchone()
 
         return (
             dict(row)
             if row
-            else None
+            else {}
         )
 
     finally:
@@ -425,45 +552,38 @@ def get_match(schedule_id):
         conn.close()
 
 
-# =========================================================
-# 특정 경기 업체별 배당
-# =========================================================
-
-def get_match_odds(schedule_id):
-
-    conn = get_connection()
-
-    try:
-
-        rows = conn.execute("""
-            SELECT *
-            FROM odds
-            WHERE schedule_id = ?
-            ORDER BY company_name
-        """, (
-            str(schedule_id),
-        )).fetchall()
-
-        return [
-            dict(row)
-            for row in rows
-        ]
-
-    finally:
-
-        conn.close()
-
-
-# =========================================================
-# 동일배당 검색
-# =========================================================
-
-def find_same_odds(
-    company_name,
-    home,
-    draw,
-    away
+def add_log(
+    message,
+    level="INFO"
 ):
+
+    with _db_lock:
+
+        conn = get_connection()
+
+        try:
+
+            conn.execute("""
+                INSERT INTO collection_logs (
+                    level,
+                    message
+                )
+                VALUES (?, ?)
+            """, (
+
+                level,
+
+                str(message)
+            ))
+
+            conn.commit()
+
+        finally:
+
+            conn.close()
+
+
+def get_logs(limit=500):
 
     conn = get_connection()
 
@@ -471,235 +591,28 @@ def find_same_odds(
 
         rows = conn.execute("""
             SELECT
-                m.*,
-
-                o.company_name,
-
-                o.final_home,
-
-                o.final_draw,
-
-                o.final_away
-
-            FROM odds o
-
-            INNER JOIN matches m
-                ON m.schedule_id =
-                   o.schedule_id
-
-            WHERE o.company_name = ?
-
-              AND o.final_home = ?
-
-              AND o.final_draw = ?
-
-              AND o.final_away = ?
-
-            ORDER BY
-                m.match_date DESC
+                created_at,
+                level,
+                message
+            FROM collection_logs
+            ORDER BY id DESC
+            LIMIT ?
         """, (
-            company_name,
-            float(home),
-            float(draw),
-            float(away)
+
+            int(limit),
         )).fetchall()
 
-        return [
-            dict(row)
-            for row in rows
-        ]
-
-    finally:
-
-        conn.close()
-
-
-# =========================================================
-# 여러 업체 동일배당 분석용
-# =========================================================
-
-def find_same_odds_multiple(
-    company_odds
-):
-
-    if not company_odds:
-        return []
-
-    conn = get_connection()
-
-    try:
-
-        conditions = []
-
-        params = []
-
-        for company, odds in (
-            company_odds.items()
-        ):
-
-            conditions.append("""
-                EXISTS (
-
-                    SELECT 1
-
-                    FROM odds x
-
-                    WHERE x.schedule_id =
-                          m.schedule_id
-
-                      AND x.company_name = ?
-
-                      AND x.final_home = ?
-
-                      AND x.final_draw = ?
-
-                      AND x.final_away = ?
-                )
-            """)
-
-            params.extend([
-                company,
-                float(odds["home"]),
-                float(odds["draw"]),
-                float(odds["away"])
-            ])
-
-        sql = f"""
-            SELECT m.*
-
-            FROM matches m
-
-            WHERE {' AND '.join(conditions)}
-
-            ORDER BY
-                m.match_date DESC
-        """
-
-        rows = conn.execute(
-            sql,
-            params
-        ).fetchall()
-
-        result = []
-
-        for row in rows:
-
-            item = dict(row)
-
-            item["company_odds"] = {}
-
-            odds_rows = conn.execute("""
-                SELECT
-                    company_name,
-                    final_home,
-                    final_draw,
-                    final_away
-                FROM odds
-                WHERE schedule_id = ?
-            """, (
-                item["schedule_id"],
-            )).fetchall()
-
-            for odds in odds_rows:
-
-                item["company_odds"][
-                    odds["company_name"]
-                ] = {
-                    "home":
-                        odds["final_home"],
-
-                    "draw":
-                        odds["final_draw"],
-
-                    "away":
-                        odds["final_away"]
-                }
-
-            result.append(item)
-
-        return result
-
-    finally:
-
-        conn.close()
-
-
-# =========================================================
-# 날짜별 경기
-# =========================================================
-
-def get_matches_by_date(
-    match_date
-):
-
-    conn = get_connection()
-
-    try:
-
-        rows = conn.execute("""
-            SELECT *
-            FROM matches
-            WHERE match_date = ?
-            ORDER BY id
-        """, (
-            str(match_date),
-        )).fetchall()
-
-        return [
-            dict(row)
-            for row in rows
-        ]
-
-    finally:
-
-        conn.close()
-
-
-# =========================================================
-# DB 초기화용
-# =========================================================
-
-def clear_database():
-
-    conn = get_connection()
-
-    try:
-
-        conn.execute(
-            "DELETE FROM odds"
+        rows = list(
+            reversed(rows)
         )
 
-        conn.execute(
-            "DELETE FROM matches"
+        return "\n".join(
+            f"[{row['created_at']}] "
+            f"[{row['level']}] "
+            f"{row['message']}"
+            for row in rows
         )
-
-        conn.commit()
 
     finally:
 
         conn.close()
-
-
-# =========================================================
-# 통계
-# =========================================================
-
-def get_database_statistics():
-
-    return {
-        "matches":
-            get_match_count(),
-
-        "odds":
-            get_odds_count(),
-
-        "companies":
-            len(get_company_names())
-    }
-
-
-# =========================================================
-# 프로그램 시작 시 자동 초기화
-# =========================================================
-
-init_database()
