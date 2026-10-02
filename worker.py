@@ -3,11 +3,19 @@ from datetime import timedelta
 
 import collector
 
+from database import (
+    update_collection_status
+)
+
 
 class CollectorWorker:
 
-    def __init__(self, start_date, end_date, cid=""):
-
+    def __init__(
+        self,
+        start_date,
+        end_date,
+        cid=""
+    ):
         self.start_date = start_date
         self.end_date = end_date
         self.cid = cid
@@ -22,9 +30,10 @@ class CollectorWorker:
         self.completed_days = 0
         self.success_days = 0
         self.failed_days = 0
-
         self.found_rows = 0
         self.saved_rows = 0
+
+        self.last_date = None
 
         self.running = False
         self.message = "대기 중"
@@ -65,107 +74,96 @@ class CollectorWorker:
         self.running = True
         self.message = "수집 중"
 
+        update_collection_status(
+            start_date=
+                self.start_date.isoformat(),
+            end_date=
+                self.end_date.isoformat(),
+            running=True,
+            completed=False,
+            found=0,
+            saved=0,
+            failed=0
+        )
+
         current = self.start_date
 
-        try:
-
-            while (
-                current <= self.end_date
-                and not self.stop_event.is_set()
-            ):
-
-                self.message = (
-                    f"{current.isoformat()} 수집 중"
-                )
-
-                try:
-
-                    result = collector.collect_day(
-                        current,
-                        self.cid
-                    )
-
-                    if not isinstance(
-                        result,
-                        dict
-                    ):
-                        result = {
-                            "success": False,
-                            "found": 0,
-                            "saved": 0,
-                            "error":
-                                "잘못된 수집 결과"
-                        }
-
-                    if result.get(
-                        "success",
-                        False
-                    ):
-
-                        self.success_days += 1
-
-                    else:
-
-                        self.failed_days += 1
-
-                    self.found_rows += int(
-                        result.get(
-                            "found",
-                            0
-                        )
-                    )
-
-                    self.saved_rows += int(
-                        result.get(
-                            "saved",
-                            0
-                        )
-                    )
-
-                    error = result.get(
-                        "error"
-                    )
-
-                    if error:
-
-                        self.message = (
-                            f"{current.isoformat()} "
-                            f"오류: {error}"
-                        )
-
-                except Exception as error:
-
-                    self.failed_days += 1
-
-                    self.message = (
-                        f"{current.isoformat()} "
-                        f"오류: {error}"
-                    )
-
-                self.completed_days += 1
-
-                current += timedelta(
-                    days=1
-                )
+        while current <= self.end_date:
 
             if self.stop_event.is_set():
 
-                self.message = "사용자에 의해 중지됨"
+                self.running = False
+                self.message = (
+                    f"중단됨 "
+                    f"(마지막 정상 날짜: "
+                    f"{self.last_date or '없음'})"
+                )
+
+                update_collection_status(
+                    last_date=self.last_date,
+                    running=False,
+                    completed=False,
+                    found=self.found_rows,
+                    saved=self.saved_rows,
+                    failed=self.failed_days
+                )
+
+                return
+
+            self.message = (
+                f"{current.isoformat()} 수집 중"
+            )
+
+            result = collector.collect_day(
+                current,
+                self.cid
+            )
+
+            if result["success"]:
+
+                self.success_days += 1
+
+                self.found_rows += (
+                    result["found"]
+                )
+
+                self.saved_rows += (
+                    result["saved"]
+                )
+
+                self.last_date = (
+                    current.isoformat()
+                )
 
             else:
 
-                self.message = (
-                    f"수집 완료 "
-                    f"(발견 {self.found_rows}, "
-                    f"저장 {self.saved_rows})"
-                )
+                self.failed_days += 1
 
-        except Exception as error:
+            self.completed_days += 1
 
-            self.message = (
-                f"Worker 오류: {error}"
+            update_collection_status(
+                last_date=self.last_date,
+                running=True,
+                completed=False,
+                found=self.found_rows,
+                saved=self.saved_rows,
+                failed=self.failed_days
             )
 
-        finally:
+            current += timedelta(days=1)
 
-            self.running = False
+        self.running = False
+        self.message = (
+            f"수집 완료 "
+            f"(발견 {self.found_rows}, "
+            f"저장 {self.saved_rows})"
+        )
+
+        update_collection_status(
+            last_date=self.last_date,
+            running=False,
+            completed=True,
+            found=self.found_rows,
+            saved=self.saved_rows,
+            failed=self.failed_days
+        )
