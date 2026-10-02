@@ -6,7 +6,7 @@ class RetryManager:
     def __init__(
         self,
         retries=3,
-        delay=2.0,
+        delay=1.0,
         backoff=2.0
     ):
 
@@ -37,6 +37,7 @@ class RetryManager:
 
         current_delay = self.delay
 
+
         for attempt in range(
             1,
             self.retries + 1
@@ -44,24 +45,36 @@ class RetryManager:
 
             try:
 
+                value = function(
+                    *args,
+                    **kwargs
+                )
+
+
                 return {
-                    "success": True,
-                    "attempt": attempt,
+
+                    "success":
+                        True,
+
+                    "attempt":
+                        attempt,
+
                     "value":
-                        function(
-                            *args,
-                            **kwargs
-                        ),
-                    "error": None
+                        value,
+
+                    "error":
+                        None
                 }
+
 
             except Exception as error:
 
                 last_error = error
 
-                if attempt >= self.retries:
 
+                if attempt >= self.retries:
                     break
+
 
                 if current_delay > 0:
 
@@ -73,9 +86,18 @@ class RetryManager:
                         self.backoff
                     )
 
+
         return {
-            "success": False,
-            "attempt": self.retries,
-            "value": None,
-            "error": str(last_error)
+
+            "success":
+                False,
+
+            "attempt":
+                self.retries,
+
+            "value":
+                None,
+
+            "error":
+                str(last_error)
         }
