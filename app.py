@@ -15,6 +15,12 @@ from analyzer import (
 
 from worker import CollectorWorker
 
+from collector import diagnose
+
+
+# =========================================================
+# 기본 설정
+# =========================================================
 
 st.set_page_config(
     page_title="7M 축구 최종배당 수집기",
@@ -22,65 +28,66 @@ st.set_page_config(
     layout="centered"
 )
 
-
 init_db()
 
+
+# =========================================================
+# Session State
+# =========================================================
 
 if "worker" not in st.session_state:
     st.session_state.worker = None
 
 
-st.title(
-    "⚽ 7M 축구 최종배당 수집기"
-)
+# =========================================================
+# 제목
+# =========================================================
+
+st.title("⚽ 7M 축구 최종배당 수집기")
 
 
-# -------------------------
-# 기간
-# -------------------------
+# =========================================================
+# 수집 기간
+# =========================================================
 
 st.subheader("수집 기간")
 
-c1, c2 = st.columns(2)
+col1, col2 = st.columns(2)
 
-with c1:
+with col1:
 
     start_date = st.date_input(
         "시작일",
-        value=date(
-            2010,
-            1,
-            1
-        )
+        value=date(2026, 10, 2)
     )
 
-with c2:
+with col2:
 
     end_date = st.date_input(
         "종료일",
-        value=date.today()
+        value=date(2026, 10, 2)
     )
 
 
-# -------------------------
-# cid
-# -------------------------
+# =========================================================
+# CID
+# =========================================================
 
 cid = st.text_input(
     "회사 필터 CID",
     value="",
-    help="전체 회사를 사용하려면 비워두세요."
+    help="전체 데이터를 사용하려면 비워두세요."
 )
 
 
-# -------------------------
-# 업체 표시
-# -------------------------
+# =========================================================
+# 업체
+# =========================================================
 
-st.subheader("분석 대상 업체")
+st.subheader("배당업체")
 
 companies = st.multiselect(
-    "업체",
+    "분석 업체",
     [
         "10Bet",
         "Bet365",
@@ -95,19 +102,19 @@ companies = st.multiselect(
 )
 
 
-# -------------------------
+# =========================================================
 # 설정
-# -------------------------
+# =========================================================
 
 st.subheader("수집 설정")
 
-st.checkbox(
+final_only = st.checkbox(
     "최종배당만 수집",
     value=True,
     disabled=True
 )
 
-st.checkbox(
+same_odds_only = st.checkbox(
     "동일배당만 분석",
     value=True,
     disabled=True
@@ -115,20 +122,18 @@ st.checkbox(
 
 hide_logs = st.checkbox(
     "로그 숨기기",
-    value=True
+    value=False
 )
 
 
 st.divider()
 
 
-# -------------------------
-# Worker
-# -------------------------
+# =========================================================
+# Worker 상태
+# =========================================================
 
-worker = (
-    st.session_state.worker
-)
+worker = st.session_state.worker
 
 running = (
     worker is not None
@@ -136,9 +141,13 @@ running = (
 )
 
 
-c1, c2 = st.columns(2)
+# =========================================================
+# 시작 / 중지
+# =========================================================
 
-with c1:
+col1, col2 = st.columns(2)
+
+with col1:
 
     start = st.button(
         "▶ 수집 시작",
@@ -146,7 +155,7 @@ with c1:
         disabled=running
     )
 
-with c2:
+with col2:
 
     stop = st.button(
         "⏹ 수집 중지",
@@ -154,6 +163,10 @@ with c2:
         disabled=not running
     )
 
+
+# =========================================================
+# 수집 시작
+# =========================================================
 
 if start:
 
@@ -165,44 +178,62 @@ if start:
 
     else:
 
-        worker = CollectorWorker(
-            start_date,
-            end_date,
-            cid
+        new_worker = CollectorWorker(
+            start_date=start_date,
+            end_date=end_date,
+            cid=cid
         )
 
-        st.session_state.worker = worker
+        st.session_state.worker = new_worker
 
-        worker.start()
+        new_worker.start()
 
         st.rerun()
 
 
+# =========================================================
+# 수집 중지
+# =========================================================
+
 if stop:
 
-    if worker:
+    if worker is not None:
 
         worker.stop()
 
         st.rerun()
 
 
-# -------------------------
-# 상태
-# -------------------------
+# =========================================================
+# 현재 Worker 다시 읽기
+# =========================================================
 
-worker = (
-    st.session_state.worker
-)
+worker = st.session_state.worker
 
 
-if worker:
+# =========================================================
+# 상태 표시
+# =========================================================
+
+st.divider()
+
+if worker is None:
+
+    st.subheader("⚪ 대기 중")
+
+    progress_value = 0
+
+    found = 0
+    saved = 0
+    failed = 0
+
+    message = "수집 대기 중..."
+
+else:
 
     if worker.running:
 
-        st.subheader(
-            "🟢 수집 중"
-        )
+        st.subheader("🟢 수집 중")
 
     else:
 
@@ -210,59 +241,53 @@ if worker:
             "⚪ " + worker.message
         )
 
-    st.progress(
-        worker.progress()
-    )
+    progress_value = worker.progress()
 
-    c1, c2, c3 = st.columns(3)
+    found = worker.found_rows
+    saved = worker.saved_rows
+    failed = worker.failed_days
 
-    c1.metric(
+    message = worker.message
+
+
+st.progress(
+    progress_value
+)
+
+
+# =========================================================
+# 통계
+# =========================================================
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+
+    st.metric(
         "발견",
-        worker.found_rows
+        found
     )
 
-    c2.metric(
+with col2:
+
+    st.metric(
         "신규 저장",
-        worker.saved_rows
+        saved
     )
 
-    c3.metric(
+with col3:
+
+    st.metric(
         "실패일",
-        worker.failed_days
+        failed
     )
 
-else:
 
-    st.subheader(
-        "⚪ 대기 중"
-    )
-
-    st.progress(0)
-
-    c1, c2, c3 = st.columns(3)
-
-    c1.metric(
-        "발견",
-        0
-    )
-
-    c2.metric(
-        "신규 저장",
-        0
-    )
-
-    c3.metric(
-        "실패일",
-        0
-    )
-
+# =========================================================
+# DB 전체
+# =========================================================
 
 st.divider()
-
-
-# -------------------------
-# DB
-# -------------------------
 
 st.metric(
     "DB 전체 경기",
@@ -270,20 +295,135 @@ st.metric(
 )
 
 
+# =========================================================
+# 로그
+# =========================================================
+
+if not hide_logs:
+
+    st.subheader("로그")
+
+    st.code(
+        message
+    )
+
+
+# =========================================================
+# 연결 진단
+# =========================================================
+
 st.divider()
 
+st.subheader("🔎 7M 페이지 연결 진단")
 
-# -------------------------
-# 동일배당
-# -------------------------
+st.caption(
+    "수집 결과가 0건일 경우 먼저 실제 서버 응답을 확인합니다."
+)
+
+
+diagnostic_date = st.date_input(
+    "진단 날짜",
+    value=date(2026, 10, 2),
+    key="diagnostic_date"
+)
+
+
+if st.button(
+    "🔍 7M 페이지 진단",
+    use_container_width=True
+):
+
+    with st.spinner(
+        "7M 페이지 확인 중..."
+    ):
+
+        try:
+
+            result = diagnose(
+                diagnostic_date,
+                cid
+            )
+
+            st.success(
+                "페이지 요청 완료"
+            )
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+
+                st.metric(
+                    "HTTP 상태",
+                    result.get(
+                        "status",
+                        "-"
+                    )
+                )
+
+            with col2:
+
+                st.metric(
+                    "받은 데이터",
+                    result.get(
+                        "size",
+                        0
+                    )
+                )
+
+            st.write(
+                "결과 페이지 문자열:",
+                result.get(
+                    "has_result",
+                    False
+                )
+            )
+
+            st.write(
+                "비교 문자열:",
+                result.get(
+                    "has_compare",
+                    False
+                )
+            )
+
+            html = result.get(
+                "html",
+                ""
+            )
+
+            if html:
+
+                with st.expander(
+                    "서버에서 받은 HTML 보기"
+                ):
+
+                    st.code(
+                        html,
+                        language="html"
+                    )
+
+        except Exception as error:
+
+            st.error(
+                f"진단 오류: {error}"
+            )
+
+
+# =========================================================
+# 동일 배당 분석
+# =========================================================
+
+st.divider()
 
 st.subheader(
     "동일 최종배당 분석"
 )
 
-c1, c2, c3 = st.columns(3)
 
-with c1:
+col1, col2, col3 = st.columns(3)
+
+
+with col1:
 
     home_odds = st.number_input(
         "홈승",
@@ -292,7 +432,8 @@ with c1:
         step=0.01
     )
 
-with c2:
+
+with col2:
 
     draw_odds = st.number_input(
         "무승부",
@@ -301,7 +442,8 @@ with c2:
         step=0.01
     )
 
-with c3:
+
+with col3:
 
     away_odds = st.number_input(
         "원정승",
@@ -312,100 +454,101 @@ with c3:
 
 
 if st.button(
-    "동일배당 분석",
+    "📊 동일배당 분석",
     use_container_width=True
 ):
 
-    stats = analyze_same_odds(
-        home_odds,
-        draw_odds,
-        away_odds
-    )
+    try:
 
-    if stats["total"] == 0:
-
-        st.warning(
-            "해당 배당의 과거 데이터가 없습니다."
+        stats = analyze_same_odds(
+            home_odds,
+            draw_odds,
+            away_odds
         )
 
-    else:
+        if stats["total"] == 0:
 
-        st.success(
-            f"총 {stats['total']}경기"
+            st.warning(
+                "해당 최종배당의 저장된 과거 경기가 없습니다."
+            )
+
+        else:
+
+            st.success(
+                f"총 {stats['total']}경기"
+            )
+
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+
+                st.metric(
+                    "홈승",
+                    f"{stats['home']}%"
+                )
+
+            with col2:
+
+                st.metric(
+                    "무승부",
+                    f"{stats['draw']}%"
+                )
+
+            with col3:
+
+                st.metric(
+                    "원정승",
+                    f"{stats['away']}%"
+                )
+
+    except Exception as error:
+
+        st.error(
+            f"분석 오류: {error}"
         )
 
-        c1, c2, c3 = st.columns(3)
 
-        c1.metric(
-            "홈승",
-            f"{stats['home']}%"
-        )
-
-        c2.metric(
-            "무",
-            f"{stats['draw']}%"
-        )
-
-        c3.metric(
-            "원정승",
-            f"{stats['away']}%"
-        )
-
-
-# -------------------------
+# =========================================================
 # 배당상 확률
-# -------------------------
+# =========================================================
 
 st.subheader(
     "배당상 확률"
 )
 
-c1, c2, c3 = st.columns(3)
 
-c1.metric(
-    "홈승",
-    f"{implied_probability(home_odds)}%"
-)
-
-c2.metric(
-    "무",
-    f"{implied_probability(draw_odds)}%"
-)
-
-c3.metric(
-    "원정승",
-    f"{implied_probability(away_odds)}%"
-)
+col1, col2, col3 = st.columns(3)
 
 
-# -------------------------
-# 로그
-# -------------------------
+with col1:
 
-if not hide_logs:
-
-    st.divider()
-
-    st.subheader("로그")
-
-    if worker:
-
-        st.code(
-            worker.message
-        )
-
-    else:
-
-        st.code(
-            "수집 대기 중..."
-        )
+    st.metric(
+        "홈승",
+        f"{implied_probability(home_odds)}%"
+    )
 
 
-# -------------------------
-# 수집 중 자동 갱신
-# -------------------------
+with col2:
 
-if worker and worker.running:
+    st.metric(
+        "무승부",
+        f"{implied_probability(draw_odds)}%"
+    )
+
+
+with col3:
+
+    st.metric(
+        "원정승",
+        f"{implied_probability(away_odds)}%"
+    )
+
+
+# =========================================================
+# 자동 새로고침
+# =========================================================
+
+if worker is not None and worker.running:
 
     time.sleep(1)
 
