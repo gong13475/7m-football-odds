@@ -2,11 +2,10 @@ import re
 import time
 import requests
 
-from database import (
-    save_match,
-    save_collection_day,
-)
+from database import save_match
 
+
+BASE_URL = "https://1x2.7mkr.com/result_kr.shtml"
 
 DATA_BASE = (
     "https://px-1x2.7mdt.com/"
@@ -20,11 +19,16 @@ HEADERS = {
         "Chrome/131.0 Safari/537.36"
     ),
     "Accept": "*/*",
-    "Accept-Language": "ko-KR,ko;q=0.9",
+    "Accept-Language": "ko-KR,ko;q=0.9"
 }
 
 
-def download_day(target_date, cid=""):
+def download_day(
+    target_date,
+    cid="",
+    retries=3,
+    timeout=30
+):
     dt = target_date.strftime("%Y-%m-%d")
 
     filename = cid if cid else "index"
@@ -35,22 +39,61 @@ def download_day(target_date, cid=""):
         f"{filename}.js"
     )
 
-    response = requests.get(
-        url,
-        headers=HEADERS,
-        timeout=30,
+    last_error = None
+
+    for attempt in range(retries):
+        try:
+            response = requests.get(
+                url,
+                headers=HEADERS,
+                timeout=timeout
+            )
+
+            response.raise_for_status()
+
+            response.encoding = (
+                response.apparent_encoding
+                or "utf-8"
+            )
+
+            return response.text
+
+        except Exception as error:
+            last_error = error
+
+            if attempt < retries - 1:
+                time.sleep(
+                    2 ** attempt
+                )
+
+    raise RuntimeError(
+        f"다운로드 실패: {last_error}"
     )
 
-    response.raise_for_status()
 
-    response.encoding = (
-        response.apparent_encoding or "utf-8"
-    )
+def _number(value):
+    try:
+        return float(value)
+    except Exception:
+        return None
 
-    return response.text
+
+def _valid_odds(values):
+    return [
+        x for x in values
+        if 1.01 <= x <= 100
+    ]
 
 
 def extract_matches(js):
+    """
+    7M history JS에서
+    결과와 1X2 배당 후보를 추출한다.
+
+    사이트 JS 구조가 변경될 경우
+    이 함수만 수정하면 된다.
+    """
+
     results = []
 
     score_pattern = re.compile(
@@ -61,9 +104,20 @@ def extract_matches(js):
         score_pattern.finditer(js)
     )
 
-    for score in scores:
-        home_score = int(score.group(1))
-        away_score = int(score.group(2))
+    used_positions = set()
+
+    for score_match in scores:
+
+        if score_match.start() in used_positions:
+            continue
+
+        home_score = int(
+            score_match.group(1)
+        )
+
+        away_score = int(
+            score_match.group(2)
+        )
 
         if home_score > away_score:
             result = "H"
@@ -74,44 +128,44 @@ def extract_matches(js):
 
         start = max(
             0,
-            score.start() - 3000,
+            score_match.start() - 4000
         )
 
         end = min(
             len(js),
-            score.end() + 3000,
+            score_match.end() + 4000
         )
 
         block = js[start:end]
 
-        odds = re.findall(
+        number_strings = re.findall(
             r"(?<![\d.])"
             r"([1-9]\d*(?:\.\d+)?)"
             r"(?![\d.])",
-            block,
+            block
         )
 
-        numbers = []
-
-        for value in odds:
-            try:
-                number = float(value)
-
-                if 1.01 <= number <= 100:
-                    numbers.append(number)
-
-            except ValueError:
-                pass
-
-        if len(numbers) < 3:
-            continue
+        numbers = _valid_odds([
+            _number(x)
+            for x in number_strings
+        ])
 
         found = None
 
-        for i in range(len(numbers) - 2):
-            candidate = numbers[i:i + 3]
+        for i in range(
+            len(numbers) - 2
+        ):
+            candidate = numbers[
+                i:i + 3
+            ]
 
-            if all(x > 1 for x in candidate):
+            if len(candidate) != 3:
+                continue
+
+            if all(
+                1.01 <= x <= 100
+                for x in candidate
+            ):
                 found = candidate
                 break
 
@@ -122,131 +176,120 @@ def extract_matches(js):
             "home_odds": found[0],
             "draw_odds": found[1],
             "away_odds": found[2],
-            "result": result,
+            "result": result
         })
+
+        used_positions.add(
+            score_match.start()
+        )
 
     return results
 
 
 def collect_day(
     target_date,
-    cid="",
-    company="미지정",
-    retries=3,
-    retry_delay=2,
+    cid=""
 ):
-    last_error = ""
-
-    for attempt in range(1, retries + 1):
-        try:
-            js = download_day(
-                target_date,
-                cid,
-            )
-
-            rows = extract_matches(js)
-
-            saved = 0
-
-            for row in rows:
-                data = {
-                    "match_date":
-                        target_date.isoformat(),
-
-                    "league": "",
-
-                    "home_team": "",
-                    "away_team": "",
-
-                    "company":
-                        company or "미지정",
-
-                    "home_odds":
-                        row["home_odds"],
-
-                    "draw_odds":
-                        row["draw_odds"],
-
-                    "away_odds":
-                        row["away_odds"],
-
-                    "result":
-                        row["result"],
-
-                    "home_probability":
-                        round(
-                            100 / row["home_odds"],
-                            2,
-                        ),
-
-                    "draw_probability":
-                        round(
-                            100 / row["draw_odds"],
-                            2,
-                        ),
-
-                    "away_probability":
-                        round(
-                            100 / row["away_odds"],
-                            2,
-                        ),
-
-                    "source": DATA_BASE,
-                }
-
-                try:
-                    saved += int(
-                        save_match(data) or 0
-                    )
-                except Exception:
-                    continue
-
-            save_collection_day(
-                target_date,
-                "success",
-                len(rows),
-                saved,
-                "",
-            )
-
-            return {
-                "success": True,
-                "found": len(rows),
-                "saved": saved,
-                "error": None,
-                "attempt": attempt,
-            }
-
-        except Exception as error:
-            last_error = str(error)
-
-            if attempt < retries:
-                time.sleep(retry_delay)
-
-    # 재시도 전부 실패 → 날짜 건너뛰기
-    save_collection_day(
-        target_date,
-        "skipped",
-        0,
-        0,
-        last_error,
-    )
-
-    return {
-        "success": False,
-        "found": 0,
-        "saved": 0,
-        "error": last_error,
-        "skipped": True,
-        "attempt": retries,
-    }
-
-
-def diagnose(target_date, cid=""):
     try:
         js = download_day(
             target_date,
-            cid,
+            cid=cid
+        )
+
+        rows = extract_matches(js)
+
+        saved = 0
+
+        for row in rows:
+
+            home_odds = row["home_odds"]
+            draw_odds = row["draw_odds"]
+            away_odds = row["away_odds"]
+
+            data = {
+                "match_date":
+                    target_date.isoformat(),
+
+                "league":
+                    "",
+
+                "home_team":
+                    "",
+
+                "away_team":
+                    "",
+
+                "company":
+                    cid if cid else "전체",
+
+                "home_odds":
+                    home_odds,
+
+                "draw_odds":
+                    draw_odds,
+
+                "away_odds":
+                    away_odds,
+
+                "result":
+                    row["result"],
+
+                "home_probability":
+                    round(
+                        100 / home_odds,
+                        2
+                    ),
+
+                "draw_probability":
+                    round(
+                        100 / draw_odds,
+                        2
+                    ),
+
+                "away_probability":
+                    round(
+                        100 / away_odds,
+                        2
+                    ),
+
+                "source":
+                    DATA_BASE
+            }
+
+            try:
+                saved += int(
+                    save_match(data)
+                )
+
+            except Exception:
+                continue
+
+        return {
+            "success": True,
+            "found": len(rows),
+            "saved": saved,
+            "error": None
+        }
+
+    except Exception as error:
+
+        return {
+            "success": False,
+            "found": 0,
+            "saved": 0,
+            "error": str(error)
+        }
+
+
+def diagnose(
+    target_date,
+    cid=""
+):
+    try:
+
+        js = download_day(
+            target_date,
+            cid=cid
         )
 
         rows = extract_matches(js)
@@ -254,19 +297,22 @@ def diagnose(target_date, cid=""):
         return {
             "status": 200,
             "size": len(js),
-            "has_result": True,
+            "has_result":
+                len(js) > 0,
             "has_compare":
                 "비교" in js,
             "found": len(rows),
-            "html": js[:10000],
+            "html": js[:10000]
         }
 
     except Exception as error:
+
         return {
             "status": 0,
             "size": 0,
             "has_result": False,
             "has_compare": False,
             "found": 0,
-            "html": f"ERROR: {error}",
+            "html":
+                f"ERROR: {error}"
         }
