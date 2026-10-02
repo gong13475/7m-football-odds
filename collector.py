@@ -1,82 +1,316 @@
-from dataclasses import dataclass
-from datetime import date
-from typing import Optional
+import re
+import time
+import requests
+
+from bs4 import BeautifulSoup
+
+from database import save_match
+from retry_manager import retry
 
 
-@dataclass
-class OddsRecord:
-    match_key: str
-    match_date: str
-    bookmaker: str
+BASE_URL = "https://1x2.7mkr.com/result_kr.shtml"
 
-    home_odds: float
-    draw_odds: float
-    away_odds: float
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 "
+        "(Linux; Android 10) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
+        "Chrome/120.0 Mobile Safari/537.36"
+    ),
+    "Accept-Language": "ko-KR,ko;q=0.9"
+}
 
-    result: Optional[str] = None
-
-
-class SevenMOddsCollector:
-    """
-    7M 실제 데이터 연결용 수집기.
-
-    주의:
-    실제로 접근이 허용된 데이터 소스/API가 연결되기 전에는
-    임의의 배당 데이터를 생성하지 않습니다.
-    """
-
-    def __init__(self):
-        self.running = False
-
-    def stop(self):
-        self.running = False
-
-    def collect(
-        self,
-        target_date: date,
-        bookmaker: str
-    ):
-        """
-        target_date의 축구 최종배당을 가져옵니다.
-
-        반환:
-            OddsRecord 리스트
-
-        실제 7M 데이터 접근 방식이 확인되면
-        이 부분에 연결합니다.
-        """
-
-        self.running = True
-
-        raise NotImplementedError(
-            "실제 7M 데이터 소스를 연결해야 합니다."
-        )
+REQUEST_DELAY = 1.5
 
 
-def validate_record(record: OddsRecord) -> bool:
-    """
-    저장 전에 데이터가 정상적인지 검사합니다.
-    """
+def probability(odds):
+    if odds <= 0:
+        return 0.0
 
-    if not record.match_key:
-        return False
-
-    if not record.match_date:
-        return False
-
-    if not record.bookmaker:
-        return False
-
-    odds = (
-        record.home_odds,
-        record.draw_odds,
-        record.away_odds
+    return round(
+        100 / odds,
+        2
     )
 
-    if any(value <= 1.0 for value in odds):
-        return False
 
-    if record.result not in (None, "H", "D", "A"):
-        return False
+def result_code(score):
+    match = re.search(
+        r"(\d+)\s*-\s*(\d+)",
+        score or ""
+    )
 
-    return True
+    if not match:
+        return None
+
+    home = int(match.group(1))
+    away = int(match.group(2))
+
+    if home > away:
+        return "H"
+
+    if home == away:
+        return "D"
+
+    return "A"
+
+
+def extract_odds(text):
+    """
+    1.93 3.60 3.10
+    형태의 1X2 배당 3개 추출
+    """
+
+    values = re.findall(
+        r"(?<![\d.])\d+(?:\.\d+)?",
+        text
+    )
+
+    if len(values) < 3:
+        return None
+
+    try:
+        return (
+            float(values[0]),
+            float(values[1]),
+            float(values[2])
+        )
+
+    except ValueError:
+        return None
+
+
+def clean(text):
+    return re.sub(
+        r"\s+",
+        " ",
+        text
+    ).strip()
+
+
+def parse_text_page(
+    html,
+    target_date
+):
+    """
+    페이지의 텍스트 구조를 기준으로 파싱.
+
+    핵심 규칙:
+
+    초기배당
+    결과
+    비교
+    최종배당
+
+    여기서 비교 이후 첫 번째
+    1X2 숫자 3개를 최종배당으로 사용.
+    """
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
+    )
+
+    lines = [
+        clean(x)
+        for x in soup.get_text("\n").splitlines()
+        if clean(x)
+    ]
+
+    results = []
+
+    for index, line in enumerate(lines):
+
+        score_match = re.search(
+            r"\(\s*\d+\s*-\s*\d+\s*\)|"
+            r"\d+\s*-\s*\d+",
+            line
+        )
+
+        if not score_match:
+            continue
+
+        score = score_match.group(0)
+
+        score = score.replace(
+            "(",
+            ""
+        ).replace(
+            ")",
+            ""
+        )
+
+        result = result_code(score)
+
+        if result is None:
+            continue
+
+        start = max(
+            0,
+            index - 12
+        )
+
+        end = min(
+            len(lines),
+            index + 12
+        )
+
+        block = lines[start:end]
+
+        compare_index = None
+
+        for i, item in enumerate(block):
+
+            if "비교" in item:
+                compare_index = i
+                break
+
+        if compare_index is None:
+            continue
+
+        after_compare = block[
+            compare_index + 1:
+        ]
+
+        final_odds = None
+
+        for item in after_compare:
+
+            odds = extract_odds(item)
+
+            if odds is None:
+                continue
+
+            final_odds = odds
+            break
+
+        if final_odds is None:
+            continue
+
+        home, draw, away = final_odds
+
+        if (
+            home <= 1.0
+            or draw <= 1.0
+            or away <= 1.0
+        ):
+            continue
+
+        results.append({
+            "match_date":
+                target_date.isoformat(),
+
+            "league": "",
+
+            "home_odds":
+                home,
+
+            "draw_odds":
+                draw,
+
+            "away_odds":
+                away,
+
+            "result":
+                result,
+
+            "home_probability":
+                probability(home),
+
+            "draw_probability":
+                probability(draw),
+
+            "away_probability":
+                probability(away),
+
+            "source":
+                BASE_URL
+        })
+
+    return results
+
+
+def download_day(
+    target_date,
+    cid=""
+):
+    """
+    실제 확인된 형식:
+
+    result_kr.shtml?cid=&dt=YYYY-MM-DD
+
+    cid가 없으면 빈 값 사용.
+    """
+
+    response = requests.get(
+        BASE_URL,
+        params={
+            "cid": cid,
+            "dt":
+                target_date.isoformat()
+        },
+        headers=HEADERS,
+        timeout=30
+    )
+
+    response.raise_for_status()
+
+    # 일시적인 과도한 요청 방지
+    time.sleep(REQUEST_DELAY)
+
+    return response.text
+
+
+def collect_day(
+    target_date,
+    cid=""
+):
+    ok, result = retry(
+        lambda:
+            download_day(
+                target_date,
+                cid
+            ),
+        attempts=3,
+        delay=3
+    )
+
+    if not ok:
+
+        return {
+            "success": False,
+            "saved": 0,
+            "error": str(result)
+        }
+
+    try:
+
+        rows = parse_text_page(
+            result,
+            target_date
+        )
+
+        saved = 0
+
+        for row in rows:
+
+            inserted = save_match(row)
+
+            if inserted:
+                saved += inserted
+
+        return {
+            "success": True,
+            "saved": saved,
+            "found": len(rows),
+            "error": None
+        }
+
+    except Exception as error:
+
+        return {
+            "success": False,
+            "saved": 0,
+            "found": 0,
+            "error": str(error)
+                }
