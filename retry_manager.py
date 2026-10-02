@@ -1,23 +1,81 @@
 import time
 
 
-def retry(
-    function,
-    attempts=3,
-    delay=2
-):
-    last_error = None
+class RetryManager:
 
-    for attempt in range(attempts):
+    def __init__(
+        self,
+        retries=3,
+        delay=2.0,
+        backoff=2.0
+    ):
 
-        try:
-            return True, function()
+        self.retries = max(
+            1,
+            int(retries)
+        )
 
-        except Exception as error:
+        self.delay = max(
+            0.0,
+            float(delay)
+        )
 
-            last_error = error
+        self.backoff = max(
+            1.0,
+            float(backoff)
+        )
 
-            if attempt < attempts - 1:
-                time.sleep(delay)
 
-    return False, last_error
+    def run(
+        self,
+        function,
+        *args,
+        **kwargs
+    ):
+
+        last_error = None
+
+        current_delay = self.delay
+
+        for attempt in range(
+            1,
+            self.retries + 1
+        ):
+
+            try:
+
+                return {
+                    "success": True,
+                    "attempt": attempt,
+                    "value":
+                        function(
+                            *args,
+                            **kwargs
+                        ),
+                    "error": None
+                }
+
+            except Exception as error:
+
+                last_error = error
+
+                if attempt >= self.retries:
+
+                    break
+
+                if current_delay > 0:
+
+                    time.sleep(
+                        current_delay
+                    )
+
+                    current_delay *= (
+                        self.backoff
+                    )
+
+        return {
+            "success": False,
+            "attempt": self.retries,
+            "value": None,
+            "error": str(last_error)
+        }
