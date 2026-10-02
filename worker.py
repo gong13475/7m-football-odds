@@ -1,4 +1,5 @@
 import threading
+
 from datetime import timedelta
 
 import collector
@@ -15,7 +16,7 @@ class CollectorWorker:
         end_date,
         cid="",
         retries=3,
-        delay=0.5
+        delay=1.0
     ):
 
         self.start_date = start_date
@@ -24,12 +25,11 @@ class CollectorWorker:
 
         self.retry = RetryManager(
             retries=retries,
-            delay=delay
+            delay=delay,
+            backoff=2.0
         )
 
-        self.stop_event = (
-            threading.Event()
-        )
+        self.stop_event = threading.Event()
 
         self.thread = None
 
@@ -88,7 +88,7 @@ class CollectorWorker:
         with self.lock:
 
             self.message = (
-                "중지 요청"
+                "중지 요청 중..."
             )
 
 
@@ -108,12 +108,14 @@ class CollectorWorker:
 
         current = self.start_date
 
+
         database.save_collection_state(
             start_date=self.start_date,
             end_date=self.end_date,
             running=True,
             stopped=False
         )
+
 
         database.add_log(
             f"수집 시작: "
@@ -124,13 +126,12 @@ class CollectorWorker:
 
         try:
 
-            while (
-                current <= self.end_date
-            ):
+            while current <= self.end_date:
 
                 if self.stop_event.is_set():
 
                     self.stopped = True
+
                     self.message = (
                         "수집 중지됨"
                     )
@@ -154,12 +155,14 @@ class CollectorWorker:
 
                     value = result["value"]
 
+
                     self.found_rows += int(
                         value.get(
                             "found",
                             0
                         )
                     )
+
 
                     self.saved_rows += int(
                         value.get(
@@ -168,21 +171,26 @@ class CollectorWorker:
                         )
                     )
 
+
                     self.success_days += 1
+
 
                     database.add_log(
                         f"{current}: "
-                        f"발견 {value.get('found', 0)}, "
-                        f"신규 {value.get('saved', 0)}"
+                        f"발견 "
+                        f"{value.get('found', 0)}, "
+                        f"신규 "
+                        f"{value.get('saved', 0)}"
                     )
+
 
                 else:
 
                     self.failed_days += 1
 
-                    error = result[
-                        "error"
-                    ]
+
+                    error = result["error"]
+
 
                     database.add_log(
                         f"{current}: "
@@ -194,9 +202,7 @@ class CollectorWorker:
 
                 self.completed_days += 1
 
-                self.last_completed_date = (
-                    current
-                )
+                self.last_completed_date = current
 
 
                 database.save_collection_state(
@@ -208,9 +214,7 @@ class CollectorWorker:
                 )
 
 
-                current += timedelta(
-                    days=1
-                )
+                current += timedelta(days=1)
 
 
             if self.stopped:
@@ -228,13 +232,12 @@ class CollectorWorker:
 
         except Exception as error:
 
-            self.error = str(
-                error
-            )
+            self.error = str(error)
 
             self.message = (
                 "수집 오류"
             )
+
 
             database.add_log(
                 f"Worker 오류: {error}",
@@ -247,12 +250,11 @@ class CollectorWorker:
             self.running = False
             self.finished = True
 
+
             database.save_collection_state(
                 start_date=self.start_date,
                 end_date=self.end_date,
-                last_completed_date=(
-                    self.last_completed_date
-                ),
+                last_completed_date=self.last_completed_date,
                 running=False,
                 stopped=self.stopped
             )
@@ -260,44 +262,46 @@ class CollectorWorker:
 
     def status(self):
 
-        return {
+        with self.lock:
 
-            "running":
-                self.running,
+            return {
 
-            "finished":
-                self.finished,
+                "running":
+                    self.running,
 
-            "stopped":
-                self.stopped,
+                "finished":
+                    self.finished,
 
-            "total_days":
-                self.total_days,
+                "stopped":
+                    self.stopped,
 
-            "completed_days":
-                self.completed_days,
+                "total_days":
+                    self.total_days,
 
-            "success_days":
-                self.success_days,
+                "completed_days":
+                    self.completed_days,
 
-            "failed_days":
-                self.failed_days,
+                "success_days":
+                    self.success_days,
 
-            "found_rows":
-                self.found_rows,
+                "failed_days":
+                    self.failed_days,
 
-            "saved_rows":
-                self.saved_rows,
+                "found_rows":
+                    self.found_rows,
 
-            "last_completed_date":
-                self.last_completed_date,
+                "saved_rows":
+                    self.saved_rows,
 
-            "progress":
-                self.progress(),
+                "last_completed_date":
+                    self.last_completed_date,
 
-            "message":
-                self.message,
+                "progress":
+                    self.progress(),
 
-            "error":
-                self.error
+                "message":
+                    self.message,
+
+                "error":
+                    self.error
         }
