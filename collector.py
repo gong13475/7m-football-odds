@@ -1,62 +1,57 @@
+import re
+import time
 import requests
-import streamlit as st
 
-URL = "https://1x2.7mkr.com/result_kr.shtml"
+from bs4 import BeautifulSoup
 
-headers = {
+from database import save_match
+from retry_manager import retry
+
+
+BASE_URL = "https://1x2.7mkr.com/result_kr.shtml"
+
+HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/131.0 Safari/537.36"
-    )
+    ),
+    "Accept-Language": "ko-KR,ko;q=0.9"
 }
 
-
-def test_page():
-
-    try:
-        response = requests.get(
-            URL,
-            params={
-                "cid": "",
-                "dt": "2026-10-02"
-            },
-            headers=headers,
-            timeout=30
-        )
-
-        st.write("HTTP 상태:", response.status_code)
-        st.write("페이지 크기:", len(response.text))
-
-        st.write(
-            "FC 아우크스부르크 포함:",
-            "아우크스부르크" in response.text
-        )
-
-        st.write(
-            "비교 포함:",
-            "비교" in response.text
-        )
-
-        st.write(
-            "result_kr 포함:",
-            "result_kr" in response.text
-        )
-
-        with st.expander("받은 HTML 앞부분"):
-            st.code(
-                response.text[:10000],
-                language="html"
-            )
-
-    except Exception as e:
-
-        st.error(
-            f"접속 오류: {e}"
-        )
+REQUEST_DELAY = 1.5
 
 
-st.title("7M 연결 진단")
+def probability(odds):
+    if odds <= 0:
+        return 0.0
 
-if st.button("페이지 테스트"):
-    test_page()
+    return round(100 / odds, 2)
+
+
+def result_code(score):
+    m = re.search(
+        r"(\d+)\s*-\s*(\d+)",
+        score or ""
+    )
+
+    if not m:
+        return None
+
+    home = int(m.group(1))
+    away = int(m.group(2))
+
+    if home > away:
+        return "H"
+
+    if home == away:
+        return "D"
+
+    return "A"
+
+
+def extract_odds(text):
+    values = re.findall(
+        r"(?<![\d.])\d+(?:\.\d+)?",
+        text
+    )
