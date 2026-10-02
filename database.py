@@ -1,7 +1,7 @@
 import sqlite3
 import threading
+
 from pathlib import Path
-from datetime import datetime
 
 
 DB_PATH = Path("odds.db")
@@ -10,6 +10,7 @@ _db_lock = threading.RLock()
 
 
 def get_connection():
+
     conn = sqlite3.connect(
         DB_PATH,
         timeout=30,
@@ -18,13 +19,19 @@ def get_connection():
 
     conn.row_factory = sqlite3.Row
 
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute(
+        "PRAGMA journal_mode=WAL"
+    )
+
+    conn.execute(
+        "PRAGMA synchronous=NORMAL"
+    )
 
     return conn
 
 
 def init_db():
+
     with _db_lock:
 
         conn = get_connection()
@@ -32,7 +39,9 @@ def init_db():
         try:
 
             conn.executescript("""
+
             CREATE TABLE IF NOT EXISTS matches (
+
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
 
                 match_key TEXT NOT NULL UNIQUE,
@@ -62,20 +71,28 @@ def init_db():
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
 
-            CREATE INDEX IF NOT EXISTS idx_matches_date
+
+            CREATE INDEX IF NOT EXISTS
+            idx_matches_date
             ON matches(match_date);
 
-            CREATE INDEX IF NOT EXISTS idx_matches_odds
+
+            CREATE INDEX IF NOT EXISTS
+            idx_matches_odds
             ON matches(
                 home_odds,
                 draw_odds,
                 away_odds
             );
 
-            CREATE INDEX IF NOT EXISTS idx_matches_result
+
+            CREATE INDEX IF NOT EXISTS
+            idx_matches_result
             ON matches(result);
 
+
             CREATE TABLE IF NOT EXISTS collection_days (
+
                 match_date TEXT PRIMARY KEY,
 
                 status TEXT NOT NULL,
@@ -89,7 +106,9 @@ def init_db():
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
 
+
             CREATE TABLE IF NOT EXISTS collection_state (
+
                 id INTEGER PRIMARY KEY CHECK(id = 1),
 
                 start_date TEXT,
@@ -105,7 +124,9 @@ def init_db():
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
 
+
             CREATE TABLE IF NOT EXISTS collection_logs (
+
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
 
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -114,6 +135,7 @@ def init_db():
 
                 message TEXT NOT NULL
             );
+
             """)
 
             conn.commit()
@@ -127,17 +149,30 @@ def save_match(row):
 
     match_key = row.get("match_key")
 
+
     if not match_key:
 
         match_key = "|".join([
+
             str(row.get("match_date", "")),
+
             str(row.get("home_team", "")),
+
             str(row.get("away_team", "")),
+
+            str(row.get("home_score", "")),
+
+            str(row.get("away_score", "")),
+
             str(row.get("home_odds", "")),
+
             str(row.get("draw_odds", "")),
+
             str(row.get("away_odds", "")),
+
             str(row.get("result", ""))
         ])
+
 
     with _db_lock:
 
@@ -146,7 +181,9 @@ def save_match(row):
         try:
 
             cur = conn.execute("""
+
                 INSERT OR IGNORE INTO matches (
+
                     match_key,
                     match_date,
                     league,
@@ -162,8 +199,15 @@ def save_match(row):
                     draw_probability,
                     away_probability,
                     source
+
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+
+                VALUES (
+                    ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?
+                )
+
             """, (
 
                 match_key,
@@ -188,30 +232,20 @@ def save_match(row):
                     ""
                 ),
 
-                row.get(
-                    "home_score"
-                ),
+                row.get("home_score"),
 
-                row.get(
-                    "away_score"
-                ),
+                row.get("away_score"),
 
                 row.get(
                     "result",
                     "D"
                 ),
 
-                float(
-                    row["home_odds"]
-                ),
+                float(row["home_odds"]),
 
-                float(
-                    row["draw_odds"]
-                ),
+                float(row["draw_odds"]),
 
-                float(
-                    row["away_odds"]
-                ),
+                float(row["away_odds"]),
 
                 float(
                     row["home_probability"]
@@ -230,6 +264,7 @@ def save_match(row):
                     "7M"
                 )
             ))
+
 
             conn.commit()
 
@@ -267,9 +302,11 @@ def get_all_matches():
     try:
 
         rows = conn.execute("""
+
             SELECT *
             FROM matches
             ORDER BY match_date DESC, id DESC
+
         """).fetchall()
 
         return [
@@ -289,17 +326,24 @@ def get_all_odds():
     try:
 
         rows = conn.execute("""
+
             SELECT
+
                 match_key,
                 match_date,
                 home_team,
                 away_team,
+
                 home_odds AS final_home,
                 draw_odds AS final_draw,
                 away_odds AS final_away,
+
                 result
+
             FROM matches
+
             ORDER BY match_date DESC, id DESC
+
         """).fetchall()
 
         return [
@@ -314,9 +358,11 @@ def get_all_odds():
 
 def get_company_names():
 
-    # 현재 7M 전용 구조에서는
-    # 업체명이 별도 테이블로 들어오지 않는 구형 DB도 지원한다.
-    return ["7M"] if get_match_count() else []
+    return (
+        ["7M"]
+        if get_match_count()
+        else []
+    )
 
 
 def get_company_counts():
@@ -343,23 +389,29 @@ def get_same_odds(
     try:
 
         rows = conn.execute("""
+
             SELECT *
+
             FROM matches
+
             WHERE ABS(home_odds - ?) < ?
               AND ABS(draw_odds - ?) < ?
-              AND ABS(away_odds - ? ) < ?
-            ORDER BY match_date DESC
+              AND ABS(away_odds - ?) < ?
+
+            ORDER BY match_date DESC, id DESC
+
         """, (
 
-            home_odds,
+            float(home_odds),
             tolerance,
 
-            draw_odds,
+            float(draw_odds),
             tolerance,
 
-            away_odds,
+            float(away_odds),
             tolerance
         )).fetchall()
+
 
         return [
             dict(row)
@@ -369,47 +421,6 @@ def get_same_odds(
     finally:
 
         conn.close()
-
-
-def get_result_counts(rows=None):
-
-    if rows is None:
-
-        conn = get_connection()
-
-        try:
-
-            rows = conn.execute("""
-                SELECT result
-                FROM matches
-            """).fetchall()
-
-        finally:
-
-            conn.close()
-
-    counts = {
-        "H": 0,
-        "D": 0,
-        "A": 0
-    }
-
-    for row in rows:
-
-        result = (
-            row["result"]
-            if isinstance(row, sqlite3.Row)
-            else row.get("result")
-        )
-
-        if result in counts:
-            counts[result] += 1
-
-    counts["total"] = sum(
-        counts.values()
-    )
-
-    return counts
 
 
 def save_collection_day(
@@ -427,23 +438,32 @@ def save_collection_day(
         try:
 
             conn.execute("""
+
                 INSERT INTO collection_days (
+
                     match_date,
                     status,
                     found,
                     saved,
                     error,
                     updated_at
+
                 )
-                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+
+                VALUES (
+                    ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
+                )
 
                 ON CONFLICT(match_date)
+
                 DO UPDATE SET
+
                     status=excluded.status,
                     found=excluded.found,
                     saved=excluded.saved,
                     error=excluded.error,
                     updated_at=CURRENT_TIMESTAMP
+
             """, (
 
                 target_date.isoformat()
@@ -484,34 +504,53 @@ def save_collection_state(
         try:
 
             conn.execute("""
+
                 INSERT INTO collection_state (
+
                     id,
                     start_date,
                     end_date,
                     last_completed_date,
                     running,
                     stopped
+
                 )
+
                 VALUES (
                     1, ?, ?, ?, ?, ?
                 )
 
                 ON CONFLICT(id)
+
                 DO UPDATE SET
-                    start_date=excluded.start_date,
-                    end_date=excluded.end_date,
+
+                    start_date=
+                        excluded.start_date,
+
+                    end_date=
+                        excluded.end_date,
+
                     last_completed_date=
                         excluded.last_completed_date,
-                    running=excluded.running,
-                    stopped=excluded.stopped,
-                    updated_at=CURRENT_TIMESTAMP
+
+                    running=
+                        excluded.running,
+
+                    stopped=
+                        excluded.stopped,
+
+                    updated_at=
+                        CURRENT_TIMESTAMP
+
             """, (
 
                 str(start_date)
-                if start_date else None,
+                if start_date
+                else None,
 
                 str(end_date)
-                if end_date else None,
+                if end_date
+                else None,
 
                 str(last_completed_date)
                 if last_completed_date
@@ -536,9 +575,11 @@ def get_collection_state():
     try:
 
         row = conn.execute("""
+
             SELECT *
             FROM collection_state
             WHERE id = 1
+
         """).fetchone()
 
         return (
@@ -564,15 +605,16 @@ def add_log(
         try:
 
             conn.execute("""
+
                 INSERT INTO collection_logs (
                     level,
                     message
                 )
+
                 VALUES (?, ?)
+
             """, (
-
                 level,
-
                 str(message)
             ))
 
@@ -590,26 +632,34 @@ def get_logs(limit=500):
     try:
 
         rows = conn.execute("""
+
             SELECT
                 created_at,
                 level,
                 message
-            FROM collection_logs
-            ORDER BY id DESC
-            LIMIT ?
-        """, (
 
+            FROM collection_logs
+
+            ORDER BY id DESC
+
+            LIMIT ?
+
+        """, (
             int(limit),
         )).fetchall()
+
 
         rows = list(
             reversed(rows)
         )
 
+
         return "\n".join(
+
             f"[{row['created_at']}] "
             f"[{row['level']}] "
             f"{row['message']}"
+
             for row in rows
         )
 
