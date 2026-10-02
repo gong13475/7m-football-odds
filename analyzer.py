@@ -1,137 +1,254 @@
 from collections import Counter
 
-from database import (
-    get_same_odds,
-    get_result_counts,
-    get_company_counts,
-)
+import database
 
 
-def implied_probabilities(
-    home_odds,
-    draw_odds,
-    away_odds
+RESULT_LABELS = {
+    "H": "승",
+    "D": "무",
+    "A": "패"
+}
+
+
+def implied_probability(odds):
+
+    odds = float(odds)
+
+    if odds <= 0:
+        return 0.0
+
+    return 100.0 / odds
+
+
+def normalized_probabilities(
+    home,
+    draw,
+    away
 ):
-    raw = [
-        1 / home_odds,
-        1 / draw_odds,
-        1 / away_odds
+
+    values = [
+        implied_probability(home),
+        implied_probability(draw),
+        implied_probability(away)
     ]
 
-    total = sum(raw)
+    total = sum(values)
 
-    return {
-        "home": round(raw[0] / total * 100, 2),
-        "draw": round(raw[1] / total * 100, 2),
-        "away": round(raw[2] / total * 100, 2),
-        "margin": round((total - 1) * 100, 2)
-    }
+    if total <= 0:
+        return [0.0, 0.0, 0.0]
+
+    return [
+        value / total * 100
+        for value in values
+    ]
 
 
-def simple_odds_probability(
-    home_odds,
-    draw_odds,
-    away_odds
+def search_same_odds(
+    home,
+    draw,
+    away
 ):
-    return {
-        "home": round(100 / home_odds, 2),
-        "draw": round(100 / draw_odds, 2),
-        "away": round(100 / away_odds, 2)
-    }
 
-
-def same_odds_analysis(
-    home_odds,
-    draw_odds,
-    away_odds
-):
-    rows = get_same_odds(
-        home_odds,
-        draw_odds,
-        away_odds
+    return database.get_same_odds(
+        home,
+        draw,
+        away
     )
 
-    counts = Counter(
-        row[0]
-        for row in rows
-    )
+
+def calculate_statistics(rows):
 
     total = len(rows)
 
+    counts = Counter(
+        row.get(
+            "result"
+        )
+        for row in rows
+    )
+
     if total == 0:
+
         return {
             "total": 0,
-            "home": 0,
-            "draw": 0,
-            "away": 0,
-            "home_pct": 0,
-            "draw_pct": 0,
-            "away_pct": 0
+            "counts": {
+                "H": 0,
+                "D": 0,
+                "A": 0
+            },
+            "actual": {
+                "H": 0.0,
+                "D": 0.0,
+                "A": 0.0
+            },
+            "expected": {
+                "H": 0.0,
+                "D": 0.0,
+                "A": 0.0
+            },
+            "difference": {
+                "H": 0.0,
+                "D": 0.0,
+                "A": 0.0
+            }
         }
 
-    return {
-        "total": total,
 
-        "home": counts.get("H", 0),
-        "draw": counts.get("D", 0),
-        "away": counts.get("A", 0),
+    actual = {}
 
-        "home_pct": round(
-            counts.get("H", 0) / total * 100,
-            2
-        ),
+    for key in ["H", "D", "A"]:
 
-        "draw_pct": round(
-            counts.get("D", 0) / total * 100,
-            2
-        ),
-
-        "away_pct": round(
-            counts.get("A", 0) / total * 100,
-            2
+        actual[key] = (
+            counts.get(key, 0)
+            / total
+            * 100
         )
+
+
+    expected_values = []
+
+    for row in rows:
+
+        probs = normalized_probabilities(
+            row["home_odds"],
+            row["draw_odds"],
+            row["away_odds"]
+        )
+
+        expected_values.append(
+            probs
+        )
+
+
+    expected = {
+
+        "H":
+            sum(
+                x[0]
+                for x in expected_values
+            ) / total,
+
+        "D":
+            sum(
+                x[1]
+                for x in expected_values
+            ) / total,
+
+        "A":
+            sum(
+                x[2]
+                for x in expected_values
+            ) / total
     }
 
 
-def overall_analysis():
-    counts = get_result_counts()
+    difference = {
 
-    total = sum(counts.values())
+        key:
+            actual[key]
+            - expected[key]
 
-    if total == 0:
-        return {
-            "total": 0,
-            "home": 0,
-            "draw": 0,
-            "away": 0,
-            "home_pct": 0,
-            "draw_pct": 0,
-            "away_pct": 0
-        }
-
-    return {
-        "total": total,
-
-        "home": counts["H"],
-        "draw": counts["D"],
-        "away": counts["A"],
-
-        "home_pct": round(
-            counts["H"] / total * 100,
-            2
-        ),
-
-        "draw_pct": round(
-            counts["D"] / total * 100,
-            2
-        ),
-
-        "away_pct": round(
-            counts["A"] / total * 100,
-            2
-        )
+        for key in [
+            "H",
+            "D",
+            "A"
+        ]
     }
 
 
-def company_analysis():
-    return get_company_counts()
+    return {
+
+        "total":
+            total,
+
+        "counts": {
+
+            "H":
+                counts.get("H", 0),
+
+            "D":
+                counts.get("D", 0),
+
+            "A":
+                counts.get("A", 0)
+        },
+
+        "actual":
+            actual,
+
+        "expected":
+            expected,
+
+        "difference":
+            difference
+    }
+
+
+def calculate_company_analysis(
+    results,
+    company="7M"
+):
+
+    if not results:
+        return None
+
+    stats = calculate_statistics(
+        results
+    )
+
+    return {
+        "company": company,
+        "total": stats["total"],
+        "counts": stats["counts"],
+        "actual": stats["actual"],
+        "expected": stats["expected"],
+        "difference": stats["difference"]
+    }
+
+
+def run_search(
+    home,
+    draw,
+    away
+):
+
+    try:
+
+        rows = search_same_odds(
+            float(home),
+            float(draw),
+            float(away)
+        )
+
+        stats = calculate_statistics(
+            rows
+        )
+
+        return {
+            "success": True,
+            "message": "검색 완료",
+            "results": rows,
+            "statistics": stats
+        }
+
+    except Exception as error:
+
+        return {
+            "success": False,
+            "message": str(error),
+            "results": [],
+            "statistics": {}
+        }
+
+
+def get_company_list():
+
+    return ["7M"]
+
+
+def result_label(result):
+
+    return RESULT_LABELS.get(
+        result,
+        result
+    )
