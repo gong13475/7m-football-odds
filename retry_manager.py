@@ -1,37 +1,23 @@
 import time
-from typing import Callable, Any
 
 
-MAX_RETRIES = 3
-
-
-def run_with_retry(
-    task: Callable[[], Any],
-    max_retries: int = MAX_RETRIES,
-    delay_seconds: float = 2.0
+def retry(
+    function,
+    attempts=3,
+    delay=2
 ):
-    """
-    작업 실패 시 최대 3회까지 재시도합니다.
-
-    성공:
-        (True, 결과, None)
-
-    계속 실패:
-        (False, None, 마지막 오류)
-    """
-
     last_error = None
 
-    for attempt in range(1, max_retries + 1):
-        try:
-            result = task()
+    for attempt in range(attempts):
 
-            return True, result, None
+        try:
+            return True, function()
 
         except Exception as error:
+
             last_error = error
 
-            if attempt < max_retries:
-                time.sleep(delay_seconds * attempt)
+            if attempt < attempts - 1:
+                time.sleep(delay)
 
-    return False, None, last_error
+    return False, last_error
