@@ -1,20 +1,23 @@
 # ============================================================
 # sevenm_crawler.py
-# ⚽ 7M 축구 최종배당 수집기
+# ⚽ 7M 축구 최종배당 수집기 - API 자동 탐색 강화판
 #
-# 핵심 개선
-# ------------------------------------------------------------
-# 1. HTML 경기 링크 탐색
-# 2. data-* 경기 ID 탐색
-# 3. JS 내부 경기 ID 탐색
-# 4. iframe 탐색
-# 5. API 후보 탐색
-# 6. API 후보 실제 호출
-# 7. JSON 재귀 탐색
-# 8. API 응답 내부 경기 ID 자동 추출
-# 9. API 응답 내부 팀명 / 스코어 / 1X2 배당 탐색
-# 10. 경기 상세 URL 자동 탐색
-# 11. 최종배당은 발견된 배당값 중 마지막 값을 사용
+# app.py 수정 불필요
+#
+# 기능
+# - 7M 시작 페이지 탐색
+# - iframe 탐색
+# - JS 탐색
+# - API 후보 탐색
+# - API 실제 호출
+# - JSON / JS / HTML 경기 ID 탐색
+# - 경기 상세 URL 자동 탐색
+# - 팀명 탐색
+# - 스코어 탐색
+# - 1X2 배당 탐색
+# - 최종배당 후보 선택
+# - 날짜별 수집
+# - 기존 app.py 인터페이스 유지
 # ============================================================
 
 import re
@@ -25,7 +28,12 @@ import requests
 
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
-from urllib.parse import urljoin, urlparse, parse_qs, unquote
+from urllib.parse import (
+    urljoin,
+    urlparse,
+    parse_qs,
+    unquote,
+)
 
 
 # ============================================================
@@ -42,7 +50,7 @@ START_URLS = [
     f"{BASE_URL}/default_vn.aspx",
 ]
 
-TIMEOUT = 25
+TIMEOUT = 20
 
 HEADERS = {
     "User-Agent": (
@@ -64,6 +72,7 @@ HEADERS = {
     "Connection": "keep-alive",
 }
 
+
 session = requests.Session()
 session.headers.update(HEADERS)
 
@@ -73,9 +82,7 @@ session.headers.update(HEADERS)
 # ============================================================
 
 def log(callback, message):
-
     if callback:
-
         try:
             callback(str(message))
         except Exception:
@@ -133,6 +140,16 @@ def clean_text(value):
         str(value)
     )
 
+    value = value.replace(
+        "\\/",
+        "/"
+    )
+
+    value = value.replace(
+        "\\u002F",
+        "/"
+    )
+
     value = re.sub(
         r"\s+",
         " ",
@@ -149,9 +166,6 @@ def clean_text(value):
 def valid_odd(value):
 
     try:
-
-        if value is None:
-            return None
 
         value = (
             str(value)
@@ -191,32 +205,9 @@ def valid_score(value):
     return None
 
 
-def is_match_id(value):
-
-    try:
-
-        number = int(
-            str(value).strip()
-        )
-
-        return (
-            1000
-            <= number
-            <= 999999999999
-        )
-
-    except Exception:
-        return False
-
-
-# ============================================================
-# 날짜
-# ============================================================
-
 def normalize_date(value):
 
     if isinstance(value, datetime):
-
         return value.strftime(
             "%Y-%m-%d"
         )
@@ -249,7 +240,38 @@ def normalize_date(value):
 
 
 # ============================================================
-# 링크
+# JSON 파싱
+# ============================================================
+
+def try_json(text):
+
+    if not text:
+        return None
+
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    cleaned = text.strip()
+
+    cleaned = (
+        cleaned
+        .replace(
+            ")]}',",
+            ""
+        )
+        .strip()
+    )
+
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        return None
+
+
+# ============================================================
+# HTML 링크
 # ============================================================
 
 def extract_links(
@@ -309,7 +331,7 @@ def extract_links(
 
 
 # ============================================================
-# URL 경기 ID
+# 경기 ID 추출
 # ============================================================
 
 def extract_match_id_from_url(url):
@@ -335,12 +357,23 @@ def extract_match_id_from_url(url):
         r"[?&](?:fid|fixtureid)"
         r"=(\d{4,12})",
 
-        r"/match(?:es)?/(\d{4,12})",
-        r"/game(?:s)?/(\d{4,12})",
-        r"/event(?:s)?/(\d{4,12})",
-        r"/fixture(?:s)?/(\d{4,12})",
-        r"/detail/(\d{4,12})",
-        r"/odds/(\d{4,12})",
+        r"/match(?:es)?/"
+        r"(\d{4,12})",
+
+        r"/game(?:s)?/"
+        r"(\d{4,12})",
+
+        r"/event(?:s)?/"
+        r"(\d{4,12})",
+
+        r"/fixture(?:s)?/"
+        r"(\d{4,12})",
+
+        r"/detail/"
+        r"(\d{4,12})",
+
+        r"/odds/"
+        r"(\d{4,12})",
 
         r"(?:match|game|event|fixture)"
         r"[-_/](\d{4,12})",
@@ -356,16 +389,23 @@ def extract_match_id_from_url(url):
 
         if match:
 
-            value = match.group(1)
+            try:
 
-            if is_match_id(value):
-                return str(value)
+                value = int(
+                    match.group(1)
+                )
+
+                if value >= 1000:
+                    return str(value)
+
+            except Exception:
+                pass
 
     return None
 
 
 # ============================================================
-# HTML 내부 경기 ID
+# HTML/JS 경기 ID
 # ============================================================
 
 def extract_match_ids(
@@ -373,6 +413,9 @@ def extract_match_ids(
 ):
 
     ids = set()
+
+    if not source_html:
+        return ids
 
     patterns = [
 
@@ -385,7 +428,7 @@ def extract_match_ids(
         r'data-(?:event-id|eventid|event_id)'
         r'\s*=\s*["\'](\d{4,12})["\']',
 
-        r'data-(?:fixture-id|fixtureid)'
+        r'data-(?:fixture-id|fixtureid|fixture_id)'
         r'\s*=\s*["\'](\d{4,12})["\']',
 
         r'"(?:matchId|matchID|match_id)"'
@@ -403,7 +446,15 @@ def extract_match_ids(
         r'/(?:match|game|event|fixture)/'
         r'(\d{4,12})',
 
-        r'[?&](?:id|mid|matchid|gameid|eventid)='
+        r'[?&](?:id|mid|matchid|gameid|eventid)'
+        r'=(\d{4,12})',
+
+        r'(?:match|game|event|fixture)'
+        r'Id\s*[:=]\s*["\']?'
+        r'(\d{4,12})',
+
+        r'(?:match|game|event|fixture)'
+        r'_?id\s*[:=]\s*["\']?'
         r'(\d{4,12})',
     ]
 
@@ -419,10 +470,23 @@ def extract_match_ids(
 
             for value in found:
 
-                if is_match_id(value):
-                    ids.add(
-                        str(value)
+                try:
+
+                    number = int(
+                        value
                     )
+
+                    if (
+                        1000
+                        <= number
+                        <= 999999999999
+                    ):
+                        ids.add(
+                            str(number)
+                        )
+
+                except Exception:
+                    pass
 
         except Exception:
             pass
@@ -431,7 +495,7 @@ def extract_match_ids(
 
 
 # ============================================================
-# 실제 경기 링크
+# 경기 링크
 # ============================================================
 
 def extract_real_match_links(
@@ -529,7 +593,9 @@ def extract_iframes(
             )
 
             if url not in result:
-                result.append(url)
+                result.append(
+                    url
+                )
 
     except Exception:
         pass
@@ -590,7 +656,12 @@ def extract_api_candidates(
 
     result = []
 
+    if not source_html:
+        return result
+
     patterns = [
+
+        r'https?://[^"\'\s<>]+',
 
         r'["\']([^"\']{1,1000}'
         r'(?:/api/|/ajax/|/data/|'
@@ -601,7 +672,15 @@ def extract_api_candidates(
         r'(?:\.json|\.ashx|\.asmx)'
         r'[^"\']*)["\']',
 
-        r'https?://[^"\'\s<>]+',
+        r'url\s*[:=]\s*["\']([^"\']+)["\']',
+
+        r'endpoint\s*[:=]\s*["\']([^"\']+)["\']',
+
+        r'apiUrl\s*[:=]\s*["\']([^"\']+)["\']',
+
+        r'api_url\s*[:=]\s*["\']([^"\']+)["\']',
+
+        r'ajaxUrl\s*[:=]\s*["\']([^"\']+)["\']',
     ]
 
     for pattern in patterns:
@@ -626,13 +705,17 @@ def extract_api_candidates(
                     str(value)
                 )
 
+                value = value.replace(
+                    "\\/",
+                    "/"
+                )
+
                 if not value:
                     continue
 
                 if value.startswith(
                     "//"
                 ):
-
                     value = (
                         "https:"
                         + value
@@ -641,13 +724,12 @@ def extract_api_candidates(
                 elif value.startswith(
                     "/"
                 ):
-
                     value = urljoin(
                         page_url,
                         value,
                     )
 
-                if not value.startswith(
+                elif not value.startswith(
                     (
                         "http://",
                         "https://",
@@ -666,6 +748,8 @@ def extract_api_candidates(
                         ".gif",
                         ".svg",
                         ".css",
+                        ".woff",
+                        ".ttf",
                     )
                 ):
                     continue
@@ -680,6 +764,8 @@ def extract_api_candidates(
                     or ".json" in low
                     or ".ashx" in low
                     or ".asmx" in low
+                    or "api" in low
+                    or "ajax" in low
                 ):
 
                     if value not in result:
@@ -694,181 +780,646 @@ def extract_api_candidates(
 
 
 # ============================================================
-# JSON 파싱
+# JS/API 내부 URL 확장
 # ============================================================
 
-def try_json(text):
+def extract_urls_from_text(
+    base_url,
+    text,
+):
+
+    result = []
 
     if not text:
-        return None
+        return result
 
-    text = text.strip()
+    patterns = [
 
-    # BOM
-    text = text.lstrip(
-        "\ufeff"
-    )
+        r'["\'](\/[^"\']{2,500})["\']',
 
-    try:
-        return json.loads(text)
+        r'["\'](https?://[^"\']{2,1000})["\']',
 
-    except Exception:
-        pass
+        r'url\s*\(\s*["\']?([^"\')\s]+)',
 
-    # JSONP
-    match = re.match(
-        r"^[^(]+\((.*)\)\s*;?\s*$",
-        text,
-        re.S,
-    )
+        r'["\']([^"\']*(?:api|ajax|json)'
+        r'[^"\']*)["\']',
+    ]
 
-    if match:
+    for pattern in patterns:
 
         try:
-            return json.loads(
-                match.group(1)
+
+            found = re.findall(
+                pattern,
+                text,
+                re.I,
             )
+
+            for value in found:
+
+                value = (
+                    html_lib.unescape(
+                        str(value)
+                    )
+                    .replace(
+                        "\\/",
+                        "/"
+                    )
+                )
+
+                if not value:
+                    continue
+
+                if value.startswith(
+                    "/"
+                ):
+                    value = urljoin(
+                        base_url,
+                        value,
+                    )
+
+                if not value.startswith(
+                    (
+                        "http://",
+                        "https://",
+                    )
+                ):
+                    continue
+
+                low = value.lower()
+
+                if (
+                    "api" in low
+                    or "ajax" in low
+                    or "json" in low
+                    or "data" in low
+                    or "service" in low
+                    or "interface" in low
+                ):
+
+                    if value not in result:
+                        result.append(
+                            value
+                        )
+
         except Exception:
             pass
 
-    return None
+    return result
 
 
 # ============================================================
-# JSON 재귀 탐색
+# 재귀 JSON 순회
 # ============================================================
 
 def walk_json(
-    obj,
+    value,
     path="",
 ):
 
     if isinstance(
-        obj,
+        value,
         dict
     ):
 
-        for key, value in obj.items():
+        yield value, path
 
-            current = (
+        for key, child in value.items():
+
+            child_path = (
                 f"{path}.{key}"
                 if path
                 else str(key)
             )
 
-            yield (
-                current,
-                str(key),
-                value,
-            )
-
             yield from walk_json(
-                value,
-                current,
+                child,
+                child_path,
             )
 
     elif isinstance(
-        obj,
+        value,
         list
     ):
 
-        for index, value in enumerate(
-            obj
+        for index, child in enumerate(
+            value
         ):
 
-            current = (
+            child_path = (
                 f"{path}[{index}]"
             )
 
-            yield (
-                current,
-                str(index),
-                value,
-            )
-
             yield from walk_json(
-                value,
-                current,
+                child,
+                child_path,
             )
 
 
 # ============================================================
-# 키 정규화
+# JSON 경기 데이터
 # ============================================================
 
-def normalized_key(key):
-
-    return re.sub(
-        r"[^a-z0-9]",
-        "",
-        str(key).lower(),
-    )
-
-
-# ============================================================
-# JSON 경기 ID
-# ============================================================
-
-def extract_match_ids_from_json(
-    data
+def extract_matches_from_json(
+    data,
 ):
 
-    ids = set()
+    results = []
 
-    id_keys = {
-        "matchid",
-        "gameid",
-        "eventid",
-        "fixtureid",
-        "matchno",
-        "gamecode",
-        "eventcode",
-        "fixturecode",
-    }
+    if data is None:
+        return results
 
-    for _, key, value in walk_json(
+    for obj, path in walk_json(
         data
     ):
 
-        nk = normalized_key(
-            key
-        )
-
-        if nk not in id_keys:
+        if not isinstance(
+            obj,
+            dict
+        ):
             continue
 
-        if is_match_id(value):
-            ids.add(
+        match_id = None
+
+        id_keys = [
+            "matchId",
+            "matchID",
+            "match_id",
+            "gameId",
+            "gameID",
+            "game_id",
+            "eventId",
+            "eventID",
+            "event_id",
+            "fixtureId",
+            "fixtureID",
+            "fixture_id",
+            "fid",
+            "mid",
+        ]
+
+        for key in id_keys:
+
+            if key not in obj:
+                continue
+
+            candidate = str(
+                obj.get(key)
+            ).strip()
+
+            candidate = re.sub(
+                r"\D",
+                "",
+                candidate,
+            )
+
+            try:
+
+                if (
+                    candidate
+                    and int(candidate) >= 1000
+                ):
+                    match_id = candidate
+                    break
+
+            except Exception:
+                pass
+
+        if not match_id:
+            continue
+
+        item = {
+            "id": match_id,
+            "url": "",
+            "json": obj,
+            "path": path,
+        }
+
+        results.append(
+            item
+        )
+
+    unique = {}
+
+    for item in results:
+        unique[item["id"]] = item
+
+    return list(
+        unique.values()
+    )
+
+
+# ============================================================
+# JSON 팀명
+# ============================================================
+
+def get_value_case_insensitive(
+    obj,
+    keys,
+):
+
+    if not isinstance(
+        obj,
+        dict
+    ):
+        return None
+
+    lowered = {
+        str(k).lower(): v
+        for k, v in obj.items()
+    }
+
+    for key in keys:
+
+        value = lowered.get(
+            key.lower()
+        )
+
+        if value is not None:
+            return value
+
+    return None
+
+
+def extract_teams_from_object(
+    obj
+):
+
+    if not isinstance(
+        obj,
+        dict
+    ):
+        return None
+
+    home_keys = [
+        "homeTeam",
+        "home_team",
+        "homeName",
+        "home_name",
+        "hometeam",
+        "home",
+        "HomeTeam",
+        "HomeName",
+    ]
+
+    away_keys = [
+        "awayTeam",
+        "away_team",
+        "awayName",
+        "away_name",
+        "awayteam",
+        "away",
+        "AwayTeam",
+        "AwayName",
+    ]
+
+    home = get_value_case_insensitive(
+        obj,
+        home_keys,
+    )
+
+    away = get_value_case_insensitive(
+        obj,
+        away_keys,
+    )
+
+    if isinstance(
+        home,
+        dict
+    ):
+        home = (
+            home.get("name")
+            or home.get("teamName")
+            or home.get("team_name")
+            or ""
+        )
+
+    if isinstance(
+        away,
+        dict
+    ):
+        away = (
+            away.get("name")
+            or away.get("teamName")
+            or away.get("team_name")
+            or ""
+        )
+
+    home = clean_text(
+        home
+    )
+
+    away = clean_text(
+        away
+    )
+
+    if (
+        2 <= len(home) <= 150
+        and 2 <= len(away) <= 150
+    ):
+        return (
+            home,
+            away,
+        )
+
+    return None
+
+
+# ============================================================
+# JSON 스코어
+# ============================================================
+
+def extract_score_from_object(
+    obj
+):
+
+    if not isinstance(
+        obj,
+        dict
+    ):
+        return None
+
+    home_keys = [
+        "homeScore",
+        "home_score",
+        "homescore",
+        "HomeScore",
+        "scoreHome",
+        "homeResult",
+    ]
+
+    away_keys = [
+        "awayScore",
+        "away_score",
+        "awayscore",
+        "AwayScore",
+        "scoreAway",
+        "awayResult",
+    ]
+
+    home = get_value_case_insensitive(
+        obj,
+        home_keys,
+    )
+
+    away = get_value_case_insensitive(
+        obj,
+        away_keys,
+    )
+
+    h = valid_score(
+        home
+    )
+
+    a = valid_score(
+        away
+    )
+
+    if (
+        h is not None
+        and a is not None
+    ):
+        return (
+            h,
+            a,
+        )
+
+    return None
+
+
+# ============================================================
+# JSON 배당
+# ============================================================
+
+def extract_odds_from_object(
+    obj
+):
+
+    if not isinstance(
+        obj,
+        dict
+    ):
+        return []
+
+    combinations = [
+
+        (
+            [
+                "home",
+                "homeOdds",
+                "odds1",
+                "win",
+                "winOdds",
+            ],
+            [
+                "draw",
+                "drawOdds",
+                "oddsX",
+            ],
+            [
+                "away",
+                "awayOdds",
+                "odds2",
+                "lose",
+                "loseOdds",
+            ],
+        ),
+
+        (
+            [
+                "one",
+                "1",
+                "odds_1",
+                "home_price",
+            ],
+            [
+                "x",
+                "X",
+                "odds_x",
+                "draw_price",
+            ],
+            [
+                "two",
+                "2",
+                "odds_2",
+                "away_price",
+            ],
+        ),
+    ]
+
+    results = []
+
+    for home_keys, draw_keys, away_keys in combinations:
+
+        h = get_value_case_insensitive(
+            obj,
+            home_keys,
+        )
+
+        d = get_value_case_insensitive(
+            obj,
+            draw_keys,
+        )
+
+        a = get_value_case_insensitive(
+            obj,
+            away_keys,
+        )
+
+        h = valid_odd(h)
+        d = valid_odd(d)
+        a = valid_odd(a)
+
+        if (
+            h is not None
+            and d is not None
+            and a is not None
+        ):
+
+            value = (
+                h,
+                d,
+                a,
+            )
+
+            if value not in results:
+                results.append(
+                    value
+                )
+
+    return results
+
+
+# ============================================================
+# JSON 전체에서 경기 데이터
+# ============================================================
+
+def parse_json_matches(
+    data
+):
+
+    results = []
+
+    for obj, path in walk_json(
+        data
+    ):
+
+        if not isinstance(
+            obj,
+            dict
+        ):
+            continue
+
+        match_id = None
+
+        for key in [
+            "matchId",
+            "matchID",
+            "match_id",
+            "gameId",
+            "gameID",
+            "game_id",
+            "eventId",
+            "eventID",
+            "event_id",
+            "fixtureId",
+            "fixtureID",
+            "fixture_id",
+            "fid",
+            "mid",
+        ]:
+
+            value = obj.get(
+                key
+            )
+
+            if value is None:
+                continue
+
+            digits = re.sub(
+                r"\D",
+                "",
                 str(value)
             )
 
-    return ids
+            try:
 
+                if (
+                    digits
+                    and int(digits) >= 1000
+                ):
+                    match_id = digits
+                    break
 
-# ============================================================
-# JSON 문자열 내부 ID
-# ============================================================
+            except Exception:
+                pass
 
-def extract_ids_from_text(
-    text
-):
+        if not match_id:
+            continue
 
-    ids = set()
-
-    if not text:
-        return ids
-
-    ids.update(
-        extract_match_ids(
-            text
+        teams = extract_teams_from_object(
+            obj
         )
+
+        score = extract_score_from_object(
+            obj
+        )
+
+        odds = extract_odds_from_object(
+            obj
+        )
+
+        results.append(
+            {
+                "match_id": match_id,
+                "teams": teams,
+                "score": score,
+                "odds": odds,
+                "object": obj,
+                "path": path,
+            }
+        )
+
+    unique = {}
+
+    for item in results:
+
+        key = item["match_id"]
+
+        if key not in unique:
+            unique[key] = item
+            continue
+
+        old = unique[key]
+
+        if not old.get(
+            "teams"
+        ) and item.get(
+            "teams"
+        ):
+            old["teams"] = item["teams"]
+
+        if not old.get(
+            "score"
+        ) and item.get(
+            "score"
+        ):
+            old["score"] = item["score"]
+
+        if not old.get(
+            "odds"
+        ) and item.get(
+            "odds"
+        ):
+            old["odds"] = item["odds"]
+
+    return list(
+        unique.values()
     )
 
-    return ids
-
 
 # ============================================================
-# 팀명 추출
+# 일반 HTML 팀명
 # ============================================================
 
 def extract_teams(
@@ -880,33 +1431,28 @@ def extract_teams(
     patterns = [
 
         (
-            r'"homeTeam"\s*:\s*"([^"]+)".{0,1500}?'
+            r'"homeTeam"\s*:\s*"([^"]+)".{0,2000}?'
             r'"awayTeam"\s*:\s*"([^"]+)"'
         ),
 
         (
-            r'"home_team"\s*:\s*"([^"]+)".{0,1500}?'
+            r'"home_team"\s*:\s*"([^"]+)".{0,2000}?'
             r'"away_team"\s*:\s*"([^"]+)"'
         ),
 
         (
-            r'"homeName"\s*:\s*"([^"]+)".{0,1500}?'
+            r'"homeName"\s*:\s*"([^"]+)".{0,2000}?'
             r'"awayName"\s*:\s*"([^"]+)"'
         ),
 
         (
-            r'"HomeTeam"\s*:\s*"([^"]+)".{0,1500}?'
+            r'"HomeTeam"\s*:\s*"([^"]+)".{0,2000}?'
             r'"AwayTeam"\s*:\s*"([^"]+)"'
         ),
 
         (
-            r'"home_name"\s*:\s*"([^"]+)".{0,1500}?'
+            r'"home_name"\s*:\s*"([^"]+)".{0,2000}?'
             r'"away_name"\s*:\s*"([^"]+)"'
-        ),
-
-        (
-            r'"home"\s*:\s*"([^"]+)".{0,1500}?'
-            r'"away"\s*:\s*"([^"]+)"'
         ),
     ]
 
@@ -932,8 +1478,7 @@ def extract_teams(
 
                 if (
                     2 <= len(home) <= 150
-                    and
-                    2 <= len(away) <= 150
+                    and 2 <= len(away) <= 150
                 ):
 
                     item = (
@@ -953,77 +1498,6 @@ def extract_teams(
 
 
 # ============================================================
-# JSON 팀명
-# ============================================================
-
-def extract_teams_from_json(
-    data
-):
-
-    home = None
-    away = None
-
-    home_keys = {
-        "hometeam",
-        "homename",
-        "hometeamname",
-        "home_name",
-        "home",
-    }
-
-    away_keys = {
-        "awayteam",
-        "awayname",
-        "awayteamname",
-        "away_name",
-        "away",
-    }
-
-    for _, key, value in walk_json(
-        data
-    ):
-
-        nk = normalized_key(
-            key
-        )
-
-        if not isinstance(
-            value,
-            (str, int, float)
-        ):
-            continue
-
-        text = clean_text(
-            value
-        )
-
-        if not (
-            2 <= len(text) <= 150
-        ):
-            continue
-
-        if (
-            nk in home_keys
-            and home is None
-        ):
-            home = text
-
-        if (
-            nk in away_keys
-            and away is None
-        ):
-            away = text
-
-    if home and away:
-        return (
-            home,
-            away,
-        )
-
-    return None
-
-
-# ============================================================
 # 화면 텍스트 팀명
 # ============================================================
 
@@ -1040,7 +1514,7 @@ def extract_teams_from_visible_text(
             "html.parser",
         )
 
-        for tag in soup(
+        for tag in soup.find_all(
             [
                 "script",
                 "style",
@@ -1050,7 +1524,9 @@ def extract_teams_from_visible_text(
             tag.decompose()
 
         text = clean_text(
-            soup.get_text(" ")
+            soup.get_text(
+                " "
+            )
         )
 
         patterns = [
@@ -1086,18 +1562,17 @@ def extract_teams_from_visible_text(
 
                     if (
                         2 <= len(home) <= 100
-                        and
-                        2 <= len(away) <= 100
+                        and 2 <= len(away) <= 100
                     ):
 
-                        item = (
+                        value = (
                             home,
                             away,
                         )
 
-                        if item not in result:
+                        if value not in result:
                             result.append(
-                                item
+                                value
                             )
 
             except Exception:
@@ -1121,21 +1596,21 @@ def extract_score(
 
         (
             r'"homeScore"\s*:\s*["\']?'
-            r'(\d{1,2})["\']?.{0,1000}?'
+            r'(\d{1,2})["\']?.{0,1500}?'
             r'"awayScore"\s*:\s*["\']?'
             r'(\d{1,2})'
         ),
 
         (
             r'"home_score"\s*:\s*["\']?'
-            r'(\d{1,2})["\']?.{0,1000}?'
+            r'(\d{1,2})["\']?.{0,1500}?'
             r'"away_score"\s*:\s*["\']?'
             r'(\d{1,2})'
         ),
 
         (
             r'"HomeScore"\s*:\s*["\']?'
-            r'(\d{1,2})["\']?.{0,1000}?'
+            r'(\d{1,2})["\']?.{0,1500}?'
             r'"AwayScore"\s*:\s*["\']?'
             r'(\d{1,2})'
         ),
@@ -1163,8 +1638,7 @@ def extract_score(
 
                 if (
                     home is not None
-                    and
-                    away is not None
+                    and away is not None
                 ):
                     return (
                         home,
@@ -1173,72 +1647,6 @@ def extract_score(
 
         except Exception:
             pass
-
-    return None
-
-
-# ============================================================
-# JSON 스코어
-# ============================================================
-
-def extract_score_from_json(
-    data
-):
-
-    home = None
-    away = None
-
-    home_keys = {
-        "homescore",
-        "home_score",
-        "scorehome",
-        "homescore1",
-        "homegoals",
-    }
-
-    away_keys = {
-        "awayscore",
-        "away_score",
-        "scoreaway",
-        "awayscore1",
-        "awaygoals",
-    }
-
-    for _, key, value in walk_json(
-        data
-    ):
-
-        nk = normalized_key(
-            key
-        )
-
-        if nk in home_keys:
-
-            score = valid_score(
-                value
-            )
-
-            if score is not None:
-                home = score
-
-        elif nk in away_keys:
-
-            score = valid_score(
-                value
-            )
-
-            if score is not None:
-                away = score
-
-    if (
-        home is not None
-        and
-        away is not None
-    ):
-        return (
-            home,
-            away,
-        )
 
     return None
 
@@ -1256,23 +1664,12 @@ def extract_odds(
     patterns = [
 
         (
-            r'"home"\s*:\s*'
-            r'([0-9]+\.[0-9]+)'
-            r'.{0,1200}?'
-            r'"draw"\s*:\s*'
-            r'([0-9]+\.[0-9]+)'
-            r'.{0,1200}?'
-            r'"away"\s*:\s*'
-            r'([0-9]+\.[0-9]+)'
-        ),
-
-        (
             r'"homeOdds"\s*:\s*'
             r'([0-9]+\.[0-9]+)'
-            r'.{0,1200}?'
+            r'.{0,2000}?'
             r'"drawOdds"\s*:\s*'
             r'([0-9]+\.[0-9]+)'
-            r'.{0,1200}?'
+            r'.{0,2000}?'
             r'"awayOdds"\s*:\s*'
             r'([0-9]+\.[0-9]+)'
         ),
@@ -1280,33 +1677,33 @@ def extract_odds(
         (
             r'"odds1"\s*:\s*'
             r'([0-9]+\.[0-9]+)'
-            r'.{0,1200}?'
+            r'.{0,2000}?'
             r'"oddsX"\s*:\s*'
             r'([0-9]+\.[0-9]+)'
-            r'.{0,1200}?'
+            r'.{0,2000}?'
             r'"odds2"\s*:\s*'
-            r'([0-9]+\.[0-9]+)'
-        ),
-
-        (
-            r'"1"\s*:\s*'
-            r'([0-9]+\.[0-9]+)'
-            r'.{0,1200}?'
-            r'"X"\s*:\s*'
-            r'([0-9]+\.[0-9]+)'
-            r'.{0,1200}?'
-            r'"2"\s*:\s*'
             r'([0-9]+\.[0-9]+)'
         ),
 
         (
             r'"win"\s*:\s*'
             r'([0-9]+\.[0-9]+)'
-            r'.{0,1200}?'
+            r'.{0,2000}?'
             r'"draw"\s*:\s*'
             r'([0-9]+\.[0-9]+)'
-            r'.{0,1200}?'
+            r'.{0,2000}?'
             r'"lose"\s*:\s*'
+            r'([0-9]+\.[0-9]+)'
+        ),
+
+        (
+            r'"1"\s*:\s*'
+            r'([0-9]+\.[0-9]+)'
+            r'.{0,2000}?'
+            r'"X"\s*:\s*'
+            r'([0-9]+\.[0-9]+)'
+            r'.{0,2000}?'
+            r'"2"\s*:\s*'
             r'([0-9]+\.[0-9]+)'
         ),
     ]
@@ -1360,172 +1757,6 @@ def extract_odds(
 
 
 # ============================================================
-# JSON 배당
-# ============================================================
-
-def extract_odds_from_json(
-    data
-):
-
-    result = []
-
-    # 직접적인 키 조합
-    key_groups = [
-
-        (
-            {
-                "homeodds",
-                "homeodd",
-                "odds1",
-                "odd1",
-                "winodds",
-                "win",
-            },
-            {
-                "drawodds",
-                "drawodd",
-                "oddsx",
-                "oddx",
-                "draw",
-            },
-            {
-                "awayodds",
-                "awayodd",
-                "odds2",
-                "odd2",
-                "loseodds",
-                "lose",
-            },
-        )
-    ]
-
-    values = {}
-
-    for _, key, value in walk_json(
-        data
-    ):
-
-        nk = normalized_key(
-            key
-        )
-
-        odd = valid_odd(
-            value
-        )
-
-        if odd is not None:
-            values.setdefault(
-                nk,
-                []
-            ).append(
-                odd
-            )
-
-    for home_keys, draw_keys, away_keys in key_groups:
-
-        homes = []
-        draws = []
-        aways = []
-
-        for key in home_keys:
-            homes.extend(
-                values.get(
-                    normalized_key(key),
-                    []
-                )
-            )
-
-        for key in draw_keys:
-            draws.extend(
-                values.get(
-                    normalized_key(key),
-                    []
-                )
-            )
-
-        for key in away_keys:
-            aways.extend(
-                values.get(
-                    normalized_key(key),
-                    []
-                )
-            )
-
-        for h in homes:
-            for d in draws:
-                for a in aways:
-
-                    value = (
-                        h,
-                        d,
-                        a,
-                    )
-
-                    if value not in result:
-                        result.append(
-                            value
-                        )
-
-    # --------------------------------------------------------
-    # 배열형 odds
-    # --------------------------------------------------------
-
-    def scan_arrays(obj):
-
-        if isinstance(
-            obj,
-            list
-        ):
-
-            numbers = []
-
-            for value in obj:
-
-                odd = valid_odd(
-                    value
-                )
-
-                if odd is not None:
-                    numbers.append(
-                        odd
-                    )
-
-            if len(numbers) == 3:
-
-                value = (
-                    numbers[0],
-                    numbers[1],
-                    numbers[2],
-                )
-
-                if value not in result:
-                    result.append(
-                        value
-                    )
-
-            for value in obj:
-                scan_arrays(
-                    value
-                )
-
-        elif isinstance(
-            obj,
-            dict
-        ):
-
-            for value in obj.values():
-                scan_arrays(
-                    value
-                )
-
-    scan_arrays(
-        data
-    )
-
-    return result
-
-
-# ============================================================
 # 결과
 # ============================================================
 
@@ -1548,378 +1779,96 @@ def make_result(
 
 
 # ============================================================
-# API 응답 분석
+# API 응답에서 경기 추출
 # ============================================================
 
-def inspect_api_response(
-    response
+def inspect_api(
+    api_url,
+    referer=None,
 ):
+
+    response = request_get(
+        api_url,
+        referer=referer,
+        timeout=15,
+    )
 
     if response is None:
         return None
 
+    if response.status_code != 200:
+        return None
+
     text = response.text
 
-    data = try_json(
+    parsed = try_json(
         text
     )
 
-    ids = set()
+    json_matches = []
 
-    teams = []
-    scores = []
-    odds = []
+    if parsed is not None:
 
-    if data is not None:
-
-        ids.update(
-            extract_match_ids_from_json(
-                data
+        json_matches = (
+            parse_json_matches(
+                parsed
             )
         )
 
-        team = extract_teams_from_json(
-            data
-        )
-
-        if team:
-            teams.append(
-                team
-            )
-
-        score = extract_score_from_json(
-            data
-        )
-
-        if score:
-            scores.append(
-                score
-            )
-
-        odds.extend(
-            extract_odds_from_json(
-                data
-            )
-        )
-
-    # JSON이 아니어도 HTML/JS 검색
-    ids.update(
-        extract_ids_from_text(
-            text
-        )
-    )
-
-    html_teams = extract_teams(
+    html_ids = extract_match_ids(
         text
     )
-
-    for team in html_teams:
-        if team not in teams:
-            teams.append(
-                team
-            )
-
-    html_score = extract_score(
-        text
-    )
-
-    if html_score:
-        scores.append(
-            html_score
-        )
-
-    odds.extend(
-        extract_odds(
-            text
-        )
-    )
-
-    unique_odds = []
-
-    for value in odds:
-
-        if value not in unique_odds:
-            unique_odds.append(
-                value
-            )
 
     return {
-        "url":
-            response.url,
-
-        "status_code":
-            response.status_code,
-
-        "text":
-            text,
-
-        "json":
-            data,
-
-        "ids":
-            ids,
-
-        "teams":
-            teams,
-
-        "scores":
-            scores,
-
-        "odds":
-            unique_odds,
+        "url": response.url,
+        "status": response.status_code,
+        "text": text,
+        "json": parsed,
+        "json_matches": json_matches,
+        "ids": html_ids,
+        "size": len(
+            response.content
+        ),
+        "content_type":
+            response.headers.get(
+                "Content-Type",
+                "",
+            ),
     }
 
 
 # ============================================================
-# API 호출
+# 상세 페이지 URL
 # ============================================================
 
-def fetch_api_candidates(
-    page,
-    date_string,
-    log_callback=None,
+def candidate_match_urls(
+    match_id
 ):
 
-    results = []
+    return [
 
-    api_urls = list(
-        page.get(
-            "apis",
-            []
-        )
-    )
+        f"{BASE_URL}/match.aspx?id={match_id}",
+        f"{BASE_URL}/match.shtml?id={match_id}",
 
-    if not api_urls:
-        return results
+        f"{BASE_URL}/match_data.aspx?id={match_id}",
+        f"{BASE_URL}/match_data.shtml?id={match_id}",
 
-    log(
-        log_callback,
-        f"🔌 API 실제 호출 시작: {len(api_urls)}개",
-    )
+        f"{BASE_URL}/odds.aspx?id={match_id}",
+        f"{BASE_URL}/odds.shtml?id={match_id}",
 
-    for index, api_url in enumerate(
-        api_urls[:30],
-        1,
-    ):
+        f"{BASE_URL}/game.aspx?id={match_id}",
+        f"{BASE_URL}/game.shtml?id={match_id}",
 
-        # 날짜가 URL에 없으면 후보 파라미터도 시도
-        urls_to_try = [
-            api_url
-        ]
+        f"{BASE_URL}/event.aspx?id={match_id}",
+        f"{BASE_URL}/event.shtml?id={match_id}",
 
-        parsed = urlparse(
-            api_url
-        )
-
-        query = parse_qs(
-            parsed.query
-        )
-
-        has_date = any(
-            key.lower()
-            in {
-                "date",
-                "day",
-                "matchdate",
-                "startdate",
-            }
-            for key in query
-        )
-
-        if not has_date:
-
-            urls_to_try.append(
-                api_url
-                + (
-                    "&"
-                    if "?" in api_url
-                    else "?"
-                )
-                + f"date={date_string}"
-            )
-
-        for url in urls_to_try:
-
-            log(
-                log_callback,
-                f"[API {index}] {url}",
-            )
-
-            response = request_get(
-                url,
-                referer=page["url"],
-            )
-
-            if response is None:
-
-                log(
-                    log_callback,
-                    "  ❌ 응답 없음",
-                )
-
-                continue
-
-            log(
-                log_callback,
-                (
-                    f"  HTTP={response.status_code} "
-                    f"bytes={len(response.content):,}"
-                ),
-            )
-
-            if response.status_code != 200:
-                continue
-
-            parsed_result = inspect_api_response(
-                response
-            )
-
-            if parsed_result is None:
-                continue
-
-            if (
-                parsed_result["ids"]
-                or parsed_result["teams"]
-                or parsed_result["odds"]
-            ):
-
-                results.append(
-                    parsed_result
-                )
-
-                log(
-                    log_callback,
-                    (
-                        "  ✅ API 데이터 발견 "
-                        f"ID={len(parsed_result['ids'])} "
-                        f"팀={len(parsed_result['teams'])} "
-                        f"배당={len(parsed_result['odds'])}"
-                    ),
-                )
-
-                break
-
-    return results
+        f"{DATA_URL}/match/{match_id}",
+        f"{DATA_URL}/game/{match_id}",
+    ]
 
 
 # ============================================================
-# 시작 페이지
-# ============================================================
-
-def get_start_page(
-    date_string,
-    log_callback=None,
-):
-
-    best = None
-
-    for base_url in START_URLS:
-
-        candidates = [
-
-            base_url,
-
-            (
-                f"{base_url}"
-                f"?date={date_string}"
-            ),
-
-            (
-                f"{base_url}"
-                f"?date={date_string}"
-                f"&view=all"
-            ),
-        ]
-
-        for url in candidates:
-
-            response = request_get(
-                url
-            )
-
-            if response is None:
-                continue
-
-            if response.status_code != 200:
-                continue
-
-            if len(response.content) < 5000:
-                continue
-
-            source_html = response.text
-
-            links = extract_real_match_links(
-                response.url,
-                source_html,
-            )
-
-            ids = extract_match_ids(
-                source_html
-            )
-
-            iframes = extract_iframes(
-                response.url,
-                source_html,
-            )
-
-            scripts = extract_scripts(
-                response.url,
-                source_html,
-            )
-
-            apis = extract_api_candidates(
-                response.url,
-                source_html,
-            )
-
-            score = (
-                len(links) * 20
-                + len(ids) * 10
-                + len(apis) * 10
-                + len(iframes) * 3
-                + len(scripts)
-                + len(response.content)
-                // 100000
-            )
-
-            candidate = {
-                "url":
-                    response.url,
-
-                "html":
-                    source_html,
-
-                "links":
-                    links,
-
-                "ids":
-                    ids,
-
-                "iframes":
-                    iframes,
-
-                "scripts":
-                    scripts,
-
-                "apis":
-                    apis,
-
-                "score":
-                    score,
-            }
-
-            if (
-                best is None
-                or
-                score > best["score"]
-            ):
-                best = candidate
-
-    return best
-
-
-# ============================================================
-# 상세 페이지
+# 상세 페이지 검사
 # ============================================================
 
 def inspect_match_url(
@@ -1961,105 +1910,23 @@ def inspect_match_url(
         source_html
     )
 
-    data = try_json(
-        source_html
-    )
-
-    if data is not None:
-
-        team = extract_teams_from_json(
-            data
-        )
-
-        if team:
-            teams = [team]
-
-        json_score = (
-            extract_score_from_json(
-                data
-            )
-        )
-
-        if json_score:
-            score = json_score
-
-        json_odds = (
-            extract_odds_from_json(
-                data
-            )
-        )
-
-        if json_odds:
-            odds.extend(
-                json_odds
-            )
-
-    unique_odds = []
-
-    for value in odds:
-
-        if value not in unique_odds:
-            unique_odds.append(
-                value
-            )
-
     return {
-        "match_id":
-            match_id,
-
-        "url":
-            response.url,
-
-        "html":
-            source_html,
-
-        "teams":
+        "match_id": match_id,
+        "url": response.url,
+        "html": source_html,
+        "teams": (
             teams[0]
             if teams
-            else None,
-
-        "score":
-            score,
-
-        "odds":
-            unique_odds,
-
-        "size":
-            len(response.content),
-
+            else None
+        ),
+        "score": score,
+        "odds": odds,
+        "size": len(
+            response.content
+        ),
         "status_code":
             response.status_code,
     }
-
-
-# ============================================================
-# 상세 URL
-# ============================================================
-
-def candidate_match_urls(
-    match_id
-):
-
-    return [
-
-        f"{BASE_URL}/match.aspx?id={match_id}",
-        f"{BASE_URL}/match.shtml?id={match_id}",
-
-        f"{BASE_URL}/match_data.aspx?id={match_id}",
-        f"{BASE_URL}/match_data.shtml?id={match_id}",
-
-        f"{BASE_URL}/odds.aspx?id={match_id}",
-        f"{BASE_URL}/odds.shtml?id={match_id}",
-
-        f"{BASE_URL}/game.aspx?id={match_id}",
-        f"{BASE_URL}/game.shtml?id={match_id}",
-
-        f"{BASE_URL}/event.aspx?id={match_id}",
-        f"{BASE_URL}/event.shtml?id={match_id}",
-
-        f"{DATA_URL}/match/{match_id}",
-        f"{DATA_URL}/game/{match_id}",
-    ]
 
 
 # ============================================================
@@ -2109,45 +1976,44 @@ def get_match(
             if detail is None:
                 continue
 
-            score_value = 0
+            score = 0
 
             if detail.get(
                 "teams"
             ):
-                score_value += 10
+                score += 10
 
             if detail.get(
                 "odds"
             ):
-                score_value += 10
+                score += 20
 
             if detail.get(
                 "score"
             ):
-                score_value += 5
+                score += 5
 
             if detail.get(
                 "size",
                 0
             ) > 5000:
-                score_value += 2
+                score += 2
 
-            detail["_score"] = (
-                score_value
-            )
+            detail[
+                "_score"
+            ] = score
 
             if (
                 best is None
-                or
-                score_value
-                > best["_score"]
+                or score > best[
+                    "_score"
+                ]
             ):
                 best = detail
 
             if (
                 detail.get("teams")
-                and
-                detail.get("odds")
+                and detail.get("odds")
             ):
                 return detail
 
@@ -2157,6 +2023,302 @@ def get_match(
             )
 
     return best
+
+
+# ============================================================
+# 시작 페이지
+# ============================================================
+
+def get_start_page(
+    date_string,
+    log_callback=None,
+):
+
+    best = None
+
+    for base_url in START_URLS:
+
+        candidates = [
+
+            base_url,
+
+            (
+                f"{base_url}"
+                f"?date={date_string}"
+            ),
+
+            (
+                f"{base_url}"
+                f"?date={date_string}"
+                f"&view=all"
+            ),
+
+            (
+                f"{base_url}"
+                f"?date={date_string}"
+                f"&sport=1"
+            ),
+        ]
+
+        for url in candidates:
+
+            response = request_get(
+                url
+            )
+
+            if response is None:
+                continue
+
+            if response.status_code != 200:
+                continue
+
+            if len(
+                response.content
+            ) < 5000:
+                continue
+
+            source_html = response.text
+
+            links = (
+                extract_real_match_links(
+                    response.url,
+                    source_html,
+                )
+            )
+
+            ids = extract_match_ids(
+                source_html
+            )
+
+            iframes = extract_iframes(
+                response.url,
+                source_html,
+            )
+
+            scripts = extract_scripts(
+                response.url,
+                source_html,
+            )
+
+            apis = extract_api_candidates(
+                response.url,
+                source_html,
+            )
+
+            score = (
+                len(links) * 20
+                + len(ids) * 10
+                + len(apis) * 5
+                + len(iframes) * 3
+                + len(scripts)
+                + len(
+                    response.content
+                ) // 100000
+            )
+
+            candidate = {
+                "url":
+                    response.url,
+
+                "html":
+                    source_html,
+
+                "links":
+                    links,
+
+                "ids":
+                    ids,
+
+                "iframes":
+                    iframes,
+
+                "scripts":
+                    scripts,
+
+                "apis":
+                    apis,
+
+                "score":
+                    score,
+            }
+
+            if (
+                best is None
+                or score > best[
+                    "score"
+                ]
+            ):
+                best = candidate
+
+    return best
+
+
+# ============================================================
+# API에서 경기 후보 수집
+# ============================================================
+
+def discover_api_matches(
+    page,
+    date_string,
+    log_callback=None,
+):
+
+    matches = []
+
+    if not page:
+        return matches
+
+    api_urls = list(
+        page.get(
+            "apis",
+            []
+        )
+    )
+
+    # JS 파일 내부 API도 탐색
+    for script_url in page.get(
+        "scripts",
+        []
+    ):
+
+        response = request_get(
+            script_url,
+            referer=page.get(
+                "url"
+            ),
+        )
+
+        if response is None:
+            continue
+
+        if response.status_code != 200:
+            continue
+
+        found = (
+            extract_urls_from_text(
+                script_url,
+                response.text,
+            )
+        )
+
+        for url in found:
+
+            if url not in api_urls:
+                api_urls.append(
+                    url
+                )
+
+    log(
+        log_callback,
+        f"🔌 실제 API 호출 후보: {len(api_urls)}개",
+    )
+
+    seen_ids = set()
+
+    for index, api_url in enumerate(
+        api_urls[:80],
+        1,
+    ):
+
+        log(
+            log_callback,
+            (
+                f"API [{index}/"
+                f"{min(80, len(api_urls))}] "
+                f"{api_url}"
+            ),
+        )
+
+        try:
+
+            result = inspect_api(
+                api_url,
+                referer=page.get(
+                    "url"
+                ),
+            )
+
+            if result is None:
+                continue
+
+            json_matches = result.get(
+                "json_matches",
+                []
+            )
+
+            for item in json_matches:
+
+                match_id = item.get(
+                    "match_id"
+                )
+
+                if not match_id:
+                    continue
+
+                if match_id in seen_ids:
+                    continue
+
+                seen_ids.add(
+                    match_id
+                )
+
+                matches.append(
+                    {
+                        "id":
+                            match_id,
+
+                        "url":
+                            "",
+
+                        "api_url":
+                            api_url,
+
+                        "api_data":
+                            item,
+                    }
+                )
+
+            # JSON이 아닌 응답
+            text = result.get(
+                "text",
+                ""
+            )
+
+            for match_id in (
+                result.get(
+                    "ids",
+                    set()
+                )
+            ):
+
+                if match_id in seen_ids:
+                    continue
+
+                seen_ids.add(
+                    match_id
+                )
+
+                matches.append(
+                    {
+                        "id":
+                            match_id,
+
+                        "url":
+                            "",
+
+                        "api_url":
+                            api_url,
+                    }
+                )
+
+        except Exception as e:
+
+            log(
+                log_callback,
+                f"  API 검사 오류: {e}",
+            )
+
+    return matches
 
 
 # ============================================================
@@ -2175,12 +2337,17 @@ def diagnose(
 
     log(
         log_callback,
+        "",
+    )
+
+    log(
+        log_callback,
         "==========================================",
     )
 
     log(
         log_callback,
-        "🔎 7M 실제 경기/API 진단",
+        "🔎 7M API/경기 데이터 진단",
     )
 
     log(
@@ -2244,7 +2411,6 @@ def diagnose(
 
         "page_url":
             "",
-
     }
 
     if page is None:
@@ -2256,43 +2422,69 @@ def diagnose(
 
         return result
 
-    source_html = page["html"]
+    source_html = page[
+        "html"
+    ]
 
-    result["http"] = 200
+    result[
+        "http"
+    ] = 200
 
-    result["page_url"] = (
-        page["url"]
-    )
+    result[
+        "page_url"
+    ] = page[
+        "url"
+    ]
 
-    result["html_bytes"] = len(
+    result[
+        "html_bytes"
+    ] = len(
         source_html.encode(
             errors="ignore"
         )
     )
 
-    result["iframes"] = len(
-        page["iframes"]
+    result[
+        "iframes"
+    ] = len(
+        page[
+            "iframes"
+        ]
     )
 
-    result["scripts"] = len(
-        page["scripts"]
+    result[
+        "scripts"
+    ] = len(
+        page[
+            "scripts"
+        ]
     )
 
-    result["apis"] = len(
-        page["apis"]
+    result[
+        "apis"
+    ] = len(
+        page[
+            "apis"
+        ]
     )
 
-    result["api_candidates"] = (
-        page["apis"]
-    )
+    result[
+        "api_candidates"
+    ] = page[
+        "apis"
+    ]
 
-    result["script_urls"] = (
-        page["scripts"]
-    )
+    result[
+        "script_urls"
+    ] = page[
+        "scripts"
+    ]
 
-    result["iframe_urls"] = (
-        page["iframes"]
-    )
+    result[
+        "iframe_urls"
+    ] = page[
+        "iframes"
+    ]
 
     # --------------------------------------------------------
     # JS 크기
@@ -2300,26 +2492,36 @@ def diagnose(
 
     js_bytes = 0
 
-    for script_url in page["scripts"]:
+    for script_url in page[
+        "scripts"
+    ]:
 
-        response = request_get(
-            script_url,
-            referer=page["url"],
-        )
+        try:
 
-        if (
-            response is not None
-            and
-            response.status_code == 200
-        ):
-
-            js_bytes += len(
-                response.content
+            script_response = request_get(
+                script_url,
+                referer=page[
+                    "url"
+                ],
             )
 
-    result["js_bytes"] = (
-        js_bytes
-    )
+            if (
+                script_response
+                is not None
+                and script_response.status_code
+                == 200
+            ):
+
+                js_bytes += len(
+                    script_response.content
+                )
+
+        except Exception:
+            pass
+
+    result[
+        "js_bytes"
+    ] = js_bytes
 
     log(
         log_callback,
@@ -2357,21 +2559,19 @@ def diagnose(
     )
 
     # --------------------------------------------------------
-    # 일반 링크
+    # 일반 HTML 경기
     # --------------------------------------------------------
 
     matches = list(
-        page["links"]
+        page[
+            "links"
+        ]
     )
 
     existing_ids = {
         item["id"]
         for item in matches
     }
-
-    # --------------------------------------------------------
-    # HTML ID
-    # --------------------------------------------------------
 
     for match_id in sorted(
         page["ids"],
@@ -2392,30 +2592,42 @@ def diagnose(
         )
 
     # --------------------------------------------------------
-    # JS 경기 ID
+    # JS 내부 경기 ID
     # --------------------------------------------------------
 
     js_match_ids = set()
 
-    for script_url in page["scripts"]:
+    for script_url in page[
+        "scripts"
+    ]:
 
-        response = request_get(
-            script_url,
-            referer=page["url"],
-        )
+        try:
 
-        if (
-            response is None
-            or
-            response.status_code != 200
-        ):
-            continue
-
-        js_match_ids.update(
-            extract_match_ids(
-                response.text
+            script_response = request_get(
+                script_url,
+                referer=page[
+                    "url"
+                ],
             )
-        )
+
+            if (
+                script_response
+                is None
+                or script_response.status_code
+                != 200
+            ):
+                continue
+
+            found = extract_match_ids(
+                script_response.text
+            )
+
+            js_match_ids.update(
+                found
+            )
+
+        except Exception:
+            pass
 
     for match_id in sorted(
         js_match_ids,
@@ -2440,61 +2652,60 @@ def diagnose(
         )
 
     # --------------------------------------------------------
-    # API 실제 호출
+    # ★ 핵심: API 실제 호출
     # --------------------------------------------------------
 
-    api_results = (
-        fetch_api_candidates(
+    api_matches = (
+        discover_api_matches(
             page,
             date_string,
             log_callback=log_callback,
         )
     )
 
-    api_ids = set()
+    for item in api_matches:
 
-    for api_result in api_results:
-
-        api_ids.update(
-            api_result.get(
-                "ids",
-                set()
-            )
+        match_id = item.get(
+            "id"
         )
 
-    log(
-        log_callback,
-        (
-            f"🔌 API에서 발견한 경기 ID: "
-            f"{len(api_ids)}"
-        ),
-    )
-
-    # --------------------------------------------------------
-    # API 경기 ID 추가
-    # --------------------------------------------------------
-
-    for match_id in sorted(
-        api_ids,
-        key=lambda x: int(x),
-    ):
-
-        if any(
-            item["id"]
-            == match_id
-            for item in matches
-        ):
+        if not match_id:
             continue
 
-        matches.append(
-            {
-                "id":
-                    match_id,
+        found = False
 
-                "url":
-                    "",
-            }
-        )
+        for existing in matches:
+
+            if existing.get(
+                "id"
+            ) == match_id:
+
+                # API 데이터 보강
+                if item.get(
+                    "api_url"
+                ):
+                    existing[
+                        "api_url"
+                    ] = item[
+                        "api_url"
+                    ]
+
+                if item.get(
+                    "api_data"
+                ):
+                    existing[
+                        "api_data"
+                    ] = item[
+                        "api_data"
+                    ]
+
+                found = True
+                break
+
+        if not found:
+            matches.append(
+                item
+            )
 
     # --------------------------------------------------------
     # 중복 제거
@@ -2511,39 +2722,65 @@ def diagnose(
         if not match_id:
             continue
 
-        unique[match_id] = item
+        unique[
+            match_id
+        ] = item
 
     matches = list(
         unique.values()
     )
 
-    result["matches"] = matches
+    result[
+        "matches"
+    ] = matches
 
-    result["match_links"] = len(
-        matches
-    )
+    result[
+        "match_links"
+    ] = len(matches)
 
-    result["match_ids"] = len(
-        matches
-    )
+    result[
+        "match_ids"
+    ] = len(matches)
 
-    result["match_candidates"] = len(
-        matches
-    )
+    result[
+        "match_candidates"
+    ] = len(matches)
 
     log(
         log_callback,
-        (
-            f"🎯 최종 경기 후보: "
-            f"{len(matches)}"
-        ),
+        f"🎯 최종 경기 후보: {len(matches)}",
     )
+
+    # --------------------------------------------------------
+    # API 후보 로그
+    # --------------------------------------------------------
+
+    if page[
+        "apis"
+    ]:
+
+        log(
+            log_callback,
+            "",
+        )
+
+        log(
+            log_callback,
+            "🔌 API 후보:",
+        )
+
+        for api in page[
+            "apis"
+        ][:40]:
+
+            log(
+                log_callback,
+                f"  {api}",
+            )
 
     # --------------------------------------------------------
     # 샘플 상세 검사
     # --------------------------------------------------------
-
-    valid = []
 
     log(
         log_callback,
@@ -2555,17 +2792,22 @@ def diagnose(
         "🧪 실제 경기 샘플 검사",
     )
 
+    valid = []
+
     for index, item in enumerate(
         matches[:5],
         1,
     ):
 
-        match_id = item["id"]
+        match_id = item[
+            "id"
+        ]
 
         log(
             log_callback,
             (
-                f"[샘플 {index}/5] "
+                f"[샘플 {index}/"
+                f"{min(5, len(matches))}] "
                 f"ID={match_id}"
             ),
         )
@@ -2573,21 +2815,70 @@ def diagnose(
         detail = get_match(
             match_id,
             source_url=(
-                item.get("url")
+                item.get(
+                    "url"
+                )
                 or None
             ),
             retry_count=1,
             retry_delay=0.3,
         )
 
-        if detail is None:
+        # API에서 이미 데이터가 있는 경우
+        api_data = item.get(
+            "api_data"
+        )
 
-            log(
-                log_callback,
-                "  ❌ 상세 데이터 없음",
+        if detail is None:
+            detail = {}
+
+        if (
+            not detail.get(
+                "teams"
+            )
+            and api_data
+        ):
+
+            detail[
+                "teams"
+            ] = extract_teams_from_object(
+                api_data.get(
+                    "object",
+                    {}
+                )
             )
 
-            continue
+        if (
+            not detail.get(
+                "score"
+            )
+            and api_data
+        ):
+
+            detail[
+                "score"
+            ] = extract_score_from_object(
+                api_data.get(
+                    "object",
+                    {}
+                )
+            )
+
+        if (
+            not detail.get(
+                "odds"
+            )
+            and api_data
+        ):
+
+            detail[
+                "odds"
+            ] = extract_odds_from_object(
+                api_data.get(
+                    "object",
+                    {}
+                )
+            )
 
         teams = detail.get(
             "teams"
@@ -2601,21 +2892,34 @@ def diagnose(
             "score"
         )
 
-        log(
-            log_callback,
-            (
-                f"  ✅ "
-                f"팀={teams} "
-                f"배당="
-                f"{odds[-1] if odds else None} "
-                f"결과="
-                f"{make_result(score)}"
-            ),
-        )
+        if (
+            teams
+            or odds
+            or score
+        ):
 
-        valid.append(
-            detail
-        )
+            log(
+                log_callback,
+                (
+                    f"  ✅ "
+                    f"팀={teams} "
+                    f"배당="
+                    f"{odds[-1] if odds else None} "
+                    f"결과="
+                    f"{make_result(score)}"
+                ),
+            )
+
+            valid.append(
+                detail
+            )
+
+        else:
+
+            log(
+                log_callback,
+                "  ⚠️ 상세 데이터 부족",
+            )
 
     log(
         log_callback,
@@ -2634,13 +2938,13 @@ def diagnose(
 
     log(
         log_callback,
-        f"발견 후보: {len(matches)}",
+        f"경기 후보: {len(matches)}",
     )
 
     log(
         log_callback,
         (
-            f"샘플 성공: "
+            f"샘플 데이터 성공: "
             f"{len(valid)}/"
             f"{min(5, len(matches))}"
         ),
@@ -2655,7 +2959,7 @@ def diagnose(
 
 
 # ============================================================
-# 1일 수집
+# 날짜 1일 수집
 # ============================================================
 
 def collect_date(
@@ -2685,15 +2989,7 @@ def collect_date(
 
         log(
             log_callback,
-            "❌ 경기 후보 0개",
-        )
-
-        log(
-            log_callback,
-            (
-                "⚠️ API 후보는 발견되었지만 "
-                "응답에서 경기 ID를 찾지 못했습니다."
-            ),
+            "❌ 경기 후보를 찾지 못했습니다.",
         )
 
         return []
@@ -2712,7 +3008,7 @@ def collect_date(
     log(
         log_callback,
         (
-            f"🎯 실제 경기 "
+            f"🎯 실제 경기 후보 "
             f"{total}개 수집 시작"
         ),
     )
@@ -2722,7 +3018,9 @@ def collect_date(
         1,
     ):
 
-        match_id = item["id"]
+        match_id = item[
+            "id"
+        ]
 
         log(
             log_callback,
@@ -2735,21 +3033,59 @@ def collect_date(
         detail = get_match(
             match_id,
             source_url=(
-                item.get("url")
+                item.get(
+                    "url"
+                )
                 or None
             ),
             retry_count=retry_count,
             retry_delay=retry_delay,
         )
 
-        if detail is None:
+        # API 데이터 보강
+        api_data = item.get(
+            "api_data"
+        )
 
-            log(
-                log_callback,
-                "  ❌ 상세 데이터 없음",
+        if detail is None:
+            detail = {}
+
+        if api_data:
+
+            api_object = api_data.get(
+                "object",
+                {}
             )
 
-            continue
+            if not detail.get(
+                "teams"
+            ):
+
+                detail[
+                    "teams"
+                ] = extract_teams_from_object(
+                    api_object
+                )
+
+            if not detail.get(
+                "score"
+            ):
+
+                detail[
+                    "score"
+                ] = extract_score_from_object(
+                    api_object
+                )
+
+            if not detail.get(
+                "odds"
+            ):
+
+                detail[
+                    "odds"
+                ] = extract_odds_from_object(
+                    api_object
+                )
 
         teams = detail.get(
             "teams"
@@ -2779,6 +3115,7 @@ def collect_date(
         final_odds = None
 
         if odds_list:
+
             final_odds = (
                 odds_list[-1]
             )
@@ -2786,6 +3123,21 @@ def collect_date(
         result_value = make_result(
             score
         )
+
+        # 최소한 ID만 있는 가짜 후보 방지
+        if (
+            not home_team
+            and not away_team
+            and not final_odds
+            and not score
+        ):
+
+            log(
+                log_callback,
+                "  ⚠️ 실제 경기 데이터 없음",
+            )
+
+            continue
 
         item_result = {
 
@@ -2802,32 +3154,42 @@ def collect_date(
                 away_team,
 
             "home_score":
-                score[0]
-                if score
-                else None,
+                (
+                    score[0]
+                    if score
+                    else None
+                ),
 
             "away_score":
-                score[1]
-                if score
-                else None,
+                (
+                    score[1]
+                    if score
+                    else None
+                ),
 
             "result":
                 result_value,
 
             "home_odds":
-                final_odds[0]
-                if final_odds
-                else None,
+                (
+                    final_odds[0]
+                    if final_odds
+                    else None
+                ),
 
             "draw_odds":
-                final_odds[1]
-                if final_odds
-                else None,
+                (
+                    final_odds[1]
+                    if final_odds
+                    else None
+                ),
 
             "away_odds":
-                final_odds[2]
-                if final_odds
-                else None,
+                (
+                    final_odds[2]
+                    if final_odds
+                    else None
+                ),
 
             "bookmaker":
                 "7M",
@@ -2838,21 +3200,12 @@ def collect_date(
             "url":
                 detail.get(
                     "url"
-                ),
+                )
+                or item.get(
+                    "api_url"
+                )
+                or "",
         }
-
-        if (
-            not home_team
-            and not away_team
-            and not final_odds
-        ):
-
-            log(
-                log_callback,
-                "  ⚠️ 경기 정보 부족",
-            )
-
-            continue
 
         results.append(
             item_result
@@ -2862,9 +3215,10 @@ def collect_date(
             log_callback,
             (
                 "  ✅ "
-                f"{home_team} vs "
-                f"{away_team} | "
-                f"{final_odds if final_odds else '-'} | "
+                f"{home_team or '-'} "
+                f"vs "
+                f"{away_team or '-'} | "
+                f"{final_odds or '-'} | "
                 f"{result_value or '-'}"
             ),
         )
@@ -2893,16 +3247,13 @@ def collect_date(
 
     log(
         log_callback,
-        (
-            f"🏁 {date_string} "
-            f"수집 완료"
-        ),
+        f"🏁 {date_string} 수집 완료",
     )
 
     log(
         log_callback,
         (
-            f"경기 저장 대상: "
+            f"실제 경기 저장 대상: "
             f"{len(results)}"
         ),
     )
@@ -2946,16 +3297,17 @@ def collect(
         "%Y-%m-%d",
     )
 
+    if start > end:
+        return []
+
     all_results = []
 
     current = start
 
     while current <= end:
 
-        date_string = (
-            current.strftime(
-                "%Y-%m-%d"
-            )
+        date_string = current.strftime(
+            "%Y-%m-%d"
         )
 
         daily = collect_date(
@@ -2979,36 +3331,23 @@ def collect(
     for item in all_results:
 
         key = (
-            item.get("match_id"),
-            item.get("home_team"),
-            item.get("away_team"),
+            item.get(
+                "match_id"
+            ),
+            item.get(
+                "home_team"
+            ),
+            item.get(
+                "away_team"
+            ),
         )
 
-        unique[key] = item
+        unique[
+            key
+        ] = item
 
     all_results = list(
         unique.values()
-    )
-
-    odds_count = sum(
-        1
-        for x in all_results
-        if (
-            x.get("home_odds")
-            is not None
-            and
-            x.get("draw_odds")
-            is not None
-            and
-            x.get("away_odds")
-            is not None
-        )
-    )
-
-    result_count = sum(
-        1
-        for x in all_results
-        if x.get("result")
     )
 
     log(
@@ -3029,25 +3368,43 @@ def collect(
     log(
         log_callback,
         (
-            f"총 경기: "
+            f"총 실제 경기: "
             f"{len(all_results)}"
         ),
     )
 
-    log(
-        log_callback,
-        (
-            f"최종배당: "
-            f"{odds_count}"
-        ),
+    odds_count = sum(
+        1
+        for x in all_results
+        if (
+            x.get(
+                "home_odds"
+            ) is not None
+            and x.get(
+                "draw_odds"
+            ) is not None
+            and x.get(
+                "away_odds"
+            ) is not None
+        )
+    )
+
+    result_count = sum(
+        1
+        for x in all_results
+        if x.get(
+            "result"
+        )
     )
 
     log(
         log_callback,
-        (
-            f"실제결과: "
-            f"{result_count}"
-        ),
+        f"최종배당: {odds_count}",
+    )
+
+    log(
+        log_callback,
+        f"실제결과: {result_count}",
     )
 
     log(
