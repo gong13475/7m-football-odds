@@ -1,19 +1,6 @@
 # ============================================================
 # sevenm_crawler.py
-# ⚽ 7M 현재 1X2 페이지 기반 수집기
-#
-# 기능
-# - 현재 7M 1X2 페이지 탐색
-# - Home / Draw / Away 배당 추출
-# - 경기명 추출
-# - 경기 날짜 추출
-# - 결과 페이지 보조 탐색
-# - SQLite 저장
-# - 백그라운드 수집
-# - 시작 / 중지
-# - 진행률
-# - 성공 / 실패
-# - 기존 app.py 함수명 호환
+# 7M 축구 1X2 최종배당 수집기
 # ============================================================
 
 import re
@@ -23,7 +10,6 @@ from datetime import datetime
 from urllib.parse import urljoin
 
 import requests
-
 import database
 
 
@@ -33,20 +19,18 @@ import database
 
 BASE_URL = "https://am.7m.com.cn"
 
-ODDS_URLS = [
-    "https://am.7m.com.cn/en/windrawwinfirsthalf.shtml",
-    "https://am.7m.com.cn/en/odds.shtml",
-]
+ODDS_URL = (
+    "https://am.7m.com.cn/en/windrawwinfirsthalf.shtml"
+)
 
-RESULT_URLS = [
-    "https://am.7m.com.cn/en/score.shtml",
-    "https://am.7m.com.cn/en/result.shtml",
-]
+TIMEOUT = 20
+REQUEST_DELAY = 0.5
 
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Linux; Android 13; SM-S901N) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
         "Chrome/153.0.0.0 Mobile Safari/537.36"
     ),
     "Accept": (
@@ -56,11 +40,7 @@ HEADERS = {
     "Accept-Language": (
         "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
     ),
-    "Referer": BASE_URL + "/en/",
 }
-
-TIMEOUT = 20
-REQUEST_DELAY = 0.5
 
 
 # ============================================================
@@ -72,7 +52,7 @@ session.headers.update(HEADERS)
 
 
 # ============================================================
-# 작업 상태
+# 백그라운드 상태
 # ============================================================
 
 job = {
@@ -105,7 +85,6 @@ worker_thread = None
 def add_log(message):
 
     now = datetime.now().strftime("%H:%M:%S")
-
     line = f"[{now}] {message}"
 
     with job_lock:
@@ -113,7 +92,6 @@ def add_log(message):
         job["log"].append(line)
 
         if len(job["log"]) > 500:
-
             job["log"] = job["log"][-500:]
 
 
@@ -136,7 +114,7 @@ def get_status():
 def is_running():
 
     with job_lock:
-        return bool(job["running"])
+        return job["running"]
 
 
 # ============================================================
@@ -154,23 +132,17 @@ def stop_collection():
 
 
 # ============================================================
-# 숫자
+# 숫자 변환
 # ============================================================
 
-def to_int(
-    value,
-    default=0
-):
+def to_int(value, default=0):
 
     try:
 
         if value is None:
             return default
 
-        match = re.search(
-            r"-?\d+",
-            str(value)
-        )
+        match = re.search(r"-?\d+", str(value))
 
         if not match:
             return default
@@ -211,24 +183,20 @@ def to_float(value):
 # HTTP
 # ============================================================
 
-def safe_get(
-    url,
-    timeout=TIMEOUT
-):
+def safe_get(url):
 
     try:
 
         response = session.get(
             url,
-            timeout=timeout,
+            timeout=TIMEOUT,
             allow_redirects=True
         )
 
         if response.status_code != 200:
 
             add_log(
-                f"HTTP {response.status_code}: "
-                f"{url}"
+                f"HTTP 오류 {response.status_code}"
             )
 
             return None
@@ -238,26 +206,35 @@ def safe_get(
     except Exception as e:
 
         add_log(
-            f"접속 오류: {str(e)[:120]}"
+            f"접속 오류: {str(e)[:150]}"
         )
 
         return None
 
 
 # ============================================================
-# HTML 정리
+# HTML 문자 정리
 # ============================================================
 
-def clean_text(text):
+def clean_text(value):
 
-    if not text:
+    if not value:
         return ""
 
+    text = str(value)
+
     text = re.sub(
-        r"<br\s*/?>",
+        r"<script.*?</script>",
         " ",
         text,
-        flags=re.I
+        flags=re.I | re.S
+    )
+
+    text = re.sub(
+        r"<style.*?</style>",
+        " ",
+        text,
+        flags=re.I | re.S
     )
 
     text = re.sub(
@@ -266,18 +243,14 @@ def clean_text(text):
         text
     )
 
-    text = re.sub(
-        r"&nbsp;",
-        " ",
-        text,
-        flags=re.I
+    text = text.replace(
+        "&nbsp;",
+        " "
     )
 
-    text = re.sub(
-        r"&amp;",
-        "&",
-        text,
-        flags=re.I
+    text = text.replace(
+        "&amp;",
+        "&"
     )
 
     text = re.sub(
@@ -290,45 +263,37 @@ def clean_text(text):
 
 
 # ============================================================
-# URL 추출
+# HTML에서 링크 추출
 # ============================================================
 
 def extract_urls(html):
 
-    urls = set()
-
     if not html:
         return []
 
-    patterns = [
-        r'href\s*=\s*["\']([^"\']+)["\']',
-        r'src\s*=\s*["\']([^"\']+)["\']',
-    ]
+    urls = set()
 
-    for pattern in patterns:
+    pattern = r'href\s*=\s*["\']([^"\']+)["\']'
 
-        for value in re.findall(
-            pattern,
-            html,
-            re.I
-        ):
+    for value in re.findall(
+        pattern,
+        html,
+        flags=re.I
+    ):
 
-            value = value.strip()
+        value = value.strip()
 
-            if value.startswith("//"):
+        if value.startswith("//"):
+            value = "https:" + value
 
-                value = "https:" + value
+        elif value.startswith("/"):
+            value = urljoin(
+                BASE_URL,
+                value
+            )
 
-            elif value.startswith("/"):
-
-                value = urljoin(
-                    BASE_URL,
-                    value
-                )
-
-            if value.startswith("http"):
-
-                urls.add(value)
+        if value.startswith("http"):
+            urls.add(value)
 
     return list(urls)
 
@@ -339,47 +304,45 @@ def extract_urls(html):
 
 def extract_match_ids(html):
 
-    ids = set()
-
     if not html:
         return []
 
+    ids = set()
+
     patterns = [
-        r"match[_-]?id\s*[=:]\s*['\"]?(\d{5,9})",
-        r"game[_-]?id\s*[=:]\s*['\"]?(\d{5,9})",
-        r"schedule[_-]?id\s*[=:]\s*['\"]?(\d{5,9})",
-        r"[?&](?:id|matchid|gameid)=(\d{5,9})",
-        r"/(\d{6,9})\.s?html",
-        r"/(\d{6,9})/",
+        r"matchid\s*[=:]\s*['\"]?(\d{5,9})",
+        r"match_id\s*[=:]\s*['\"]?(\d{5,9})",
+        r"gameid\s*[=:]\s*['\"]?(\d{5,9})",
+        r"game_id\s*[=:]\s*['\"]?(\d{5,9})",
+        r"scheduleid\s*[=:]\s*['\"]?(\d{5,9})",
+        r"schedule_id\s*[=:]\s*['\"]?(\d{5,9})",
     ]
 
     for pattern in patterns:
 
         try:
 
-            found = re.findall(
+            values = re.findall(
                 pattern,
                 html,
                 flags=re.I
             )
 
-            for value in found:
+            for value in values:
 
                 number = to_int(value)
 
                 if 10000 <= number <= 999999999:
-
                     ids.add(number)
 
         except Exception:
-
             pass
 
     return sorted(ids)
 
 
 # ============================================================
-# 배당 숫자
+# 배당값 확인
 # ============================================================
 
 def valid_odd(value):
@@ -393,211 +356,310 @@ def valid_odd(value):
 
 
 # ============================================================
-# 현재 7M 1X2 페이지 파싱
+# 3개 배당 추출
 # ============================================================
 
-def parse_odds_page(html):
+def extract_triplets(text):
 
-    matches = []
+    if not text:
+        return []
 
-    if not html:
-        return matches
+    results = []
 
-    # --------------------------------------------------------
-    # HTML 태그 제거 전 원본을 우선 사용
-    # --------------------------------------------------------
+    pattern = (
+        r"(\d+(?:\.\d+)?)"
+        r"\s*[,/|]\s*"
+        r"(\d+(?:\.\d+)?)"
+        r"\s*[,/|]\s*"
+        r"(\d+(?:\.\d+)?)"
+    )
 
-    text = clean_text(html)
+    for match in re.findall(
+        pattern,
+        text
+    ):
 
-    # --------------------------------------------------------
-    # 경기 행 후보
-    # --------------------------------------------------------
+        h = to_float(match[0])
+        d = to_float(match[1])
+        a = to_float(match[2])
 
-    row_patterns = [
-        r"<tr[^>]*>(.*?)</tr>",
-        r"<li[^>]*>(.*?)</li>",
-        r"<div[^>]*>(.*?)</div>",
-    ]
+        if (
+            valid_odd(h)
+            and valid_odd(d)
+            and valid_odd(a)
+        ):
 
-    rows = []
+            results.append(
+                (
+                    h,
+                    d,
+                    a
+                )
+            )
 
-    for pattern in row_patterns:
+    return results
 
-        found = re.findall(
-            pattern,
-            html,
-            flags=re.I | re.S
+
+# ============================================================
+# 페이지에서 숫자 3개씩 찾기
+# ============================================================
+
+def extract_three_odds(text):
+
+    if not text:
+        return []
+
+    numbers = re.findall(
+        r"(?<![\d.])"
+        r"\d+\.\d+"
+        r"(?![\d.])",
+        text
+    )
+
+    values = []
+
+    for value in numbers:
+
+        number = to_float(value)
+
+        if valid_odd(number):
+            values.append(number)
+
+    results = []
+
+    index = 0
+
+    while index + 2 < len(values):
+
+        h = values[index]
+        d = values[index + 1]
+        a = values[index + 2]
+
+        results.append(
+            (
+                h,
+                d,
+                a
+            )
         )
 
-        if found:
-            rows.extend(found)
+        index += 3
 
-    # --------------------------------------------------------
-    # 테이블 행 방식
-    # --------------------------------------------------------
+    return results
+
+
+# ============================================================
+# 팀명 후보 정리
+# ============================================================
+
+def clean_team_name(value):
+
+    if not value:
+        return ""
+
+    text = clean_text(value)
+
+    text = re.sub(
+        r"^\d+[:.]\d+$",
+        "",
+        text
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
+
+    return text.strip()
+
+
+# ============================================================
+# 경기 행 파싱
+# ============================================================
+
+def parse_rows(html):
+
+    if not html:
+        return []
+
+    results = []
+
+    rows = re.findall(
+        r"<tr[^>]*>(.*?)</tr>",
+        html,
+        flags=re.I | re.S
+    )
 
     for row in rows:
 
-        row_text = clean_text(row)
+        text = clean_text(row)
 
-        if not row_text:
+        if not text:
             continue
 
-        numbers = re.findall(
-            r"(?<![\d.])"
-            r"(\d+(?:\.\d+)?)"
-            r"(?![\d.])",
-            row_text
-        )
+        odds = extract_triplets(text)
 
-        odds = []
+        if not odds:
+            odds = extract_three_odds(text)
 
-        for value in numbers:
-
-            if valid_odd(value):
-
-                odds.append(
-                    float(value)
-                )
-
-        if len(odds) < 3:
+        if not odds:
             continue
 
-        # 가장 먼저 나오는 3개를 1X2로 사용
-        home_odd = odds[0]
-        draw_odd = odds[1]
-        away_odd = odds[2]
+        home_odd, draw_odd, away_odd = odds[0]
 
-        # 팀명 추출
         parts = re.split(
-            r"\s+",
-            row_text
+            r"\s{2,}|\|",
+            text
         )
 
-        # 숫자/시간/불필요 문자 제거
-        names = []
+        parts = [
+            clean_team_name(x)
+            for x in parts
+            if clean_team_name(x)
+        ]
+
+        if len(parts) < 2:
+            continue
+
+        home = ""
+        away = ""
 
         for part in parts:
 
-            if re.fullmatch(
-                r"\d+(?::\d+)?",
-                part
+            if (
+                "." in part
+                and re.fullmatch(
+                    r"[\d.\s]+",
+                    part
+                )
             ):
                 continue
 
-            if re.fullmatch(
-                r"\d+(?:\.\d+)?",
-                part
-            ):
-                continue
-
-            if part in [
-                "Home",
-                "Draw",
-                "Away",
+            if part.lower() in [
+                "home",
+                "draw",
+                "away",
             ]:
                 continue
 
-            names.append(part)
+            if not home:
+                home = part
+                continue
 
-        if len(names) < 2:
+            if not away:
+                away = part
+                break
+
+        if not home or not away:
             continue
 
-        home = names[0]
-        away = names[-1]
-
-        if (
-            not home
-            or not away
-            or home == away
-        ):
+        if home == away:
             continue
 
-        matches.append({
-            "home_team": home,
-            "away_team": away,
-            "home_odds": home_odd,
-            "draw_odds": draw_odd,
-            "away_odds": away_odd,
-            "source": "7M",
-        })
-
-    # --------------------------------------------------------
-    # 페이지 전체 텍스트 보조 파싱
-    # --------------------------------------------------------
-
-    if not matches:
-
-        lines = [
-            line.strip()
-            for line in text.splitlines()
-            if line.strip()
-        ]
-
-        for line in lines:
-
-            odds_match = re.search(
-                r"(\d+(?:\.\d+)?)\s+"
-                r+ r"(\d+(?:\.\d+)?)\s+"
-                r"(\d+(?:\.\d+)?)",
-                line
-            )
-
-            if not odds_match:
-                continue
-
-            home_odd = to_float(
-                odds_match.group(1)
-            )
-
-            draw_odd = to_float(
-                odds_match.group(2)
-            )
-
-            away_odd = to_float(
-                odds_match.group(3)
-            )
-
-            if not all([
-                valid_odd(home_odd),
-                valid_odd(draw_odd),
-                valid_odd(away_odd),
-            ]):
-                continue
-
-            before = line[
-                :odds_match.start()
-            ].strip()
-
-            after = line[
-                odds_match.end():
-            ].strip()
-
-            before_parts = before.split()
-            after_parts = after.split()
-
-            if not before_parts:
-                continue
-
-            home = before_parts[-1]
-
-            if after_parts:
-                away = after_parts[0]
-            else:
-                continue
-
-            matches.append({
+        results.append(
+            {
                 "home_team": home,
                 "away_team": away,
                 "home_odds": home_odd,
                 "draw_odds": draw_odd,
                 "away_odds": away_odd,
-                "source": "7M",
-            })
+            }
+        )
 
-    # --------------------------------------------------------
-    # 중복 제거
-    # --------------------------------------------------------
+    return results
+
+
+# ============================================================
+# 전체 페이지 보조 파싱
+# ============================================================
+
+def parse_page_fallback(html):
+
+    if not html:
+        return []
+
+    text = clean_text(html)
+
+    results = []
+
+    triplets = extract_triplets(
+        text
+    )
+
+    for index, odd in enumerate(
+        triplets
+    ):
+
+        h, d, a = odd
+
+        results.append(
+            {
+                "home_team": f"7M 경기 {index + 1} 홈",
+                "away_team": f"7M 경기 {index + 1} 원정",
+                "home_odds": h,
+                "draw_odds": d,
+                "away_odds": a,
+            }
+        )
+
+    return results
+
+
+# ============================================================
+# 현재 7M 경기 탐색
+# ============================================================
+
+def discover_matches():
+
+    add_log(
+        "🌐 7M 1X2 페이지 접속"
+    )
+
+    response = safe_get(
+        ODDS_URL
+    )
+
+    if response is None:
+
+        add_log(
+            "❌ 7M 페이지 접속 실패"
+        )
+
+        return []
+
+    html = response.text
+
+    add_log(
+        f"📄 페이지 수신 완료 "
+        f"{len(html):,} bytes"
+    )
+
+    ids = extract_match_ids(
+        html
+    )
+
+    add_log(
+        f"🔎 경기 ID 후보 {len(ids)}개"
+    )
+
+    matches = parse_rows(
+        html
+    )
+
+    add_log(
+        f"📊 HTML 경기행 {len(matches)}개"
+    )
+
+    if not matches:
+
+        matches = parse_page_fallback(
+            html
+        )
+
+        add_log(
+            f"📊 보조 파싱 경기 {len(matches)}개"
+        )
 
     unique = {}
 
@@ -619,140 +681,32 @@ def parse_odds_page(html):
 
 
 # ============================================================
-# 날짜 추출
-# ============================================================
-
-def extract_date(html):
-
-    if not html:
-        return ""
-
-    patterns = [
-        r"(\d{1,2}\s+"
-        r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
-        r"\s+\d{4})",
-
-        r"(\d{4}-\d{2}-\d{2})",
-
-        r"(\d{2}\s+"
-        r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
-        r"\s+\d{4})",
-    ]
-
-    for pattern in patterns:
-
-        match = re.search(
-            pattern,
-            html,
-            re.I
-        )
-
-        if match:
-            return match.group(1)
-
-    return ""
-
-
-# ============================================================
-# 현재 7M 데이터 탐색
-# ============================================================
-
-def discover_current_matches():
-
-    all_matches = []
-
-    for url in ODDS_URLS:
-
-        if not is_running():
-            break
-
-        add_log(
-            f"🔎 7M 페이지 탐색: {url}"
-        )
-
-        response = safe_get(url)
-
-        if response is None:
-            continue
-
-        html = response.text
-
-        parsed = parse_odds_page(
-            html
-        )
-
-        add_log(
-            f"📊 발견 경기 {len(parsed)}개"
-        )
-
-        all_matches.extend(
-            parsed
-        )
-
-        if parsed:
-            break
-
-    unique = {}
-
-    for item in all_matches:
-
-        key = (
-            item["home_team"],
-            item["away_team"],
-        )
-
-        unique[key] = item
-
-    return list(
-        unique.values()
-    )
-
-
-# ============================================================
 # DB 저장
 # ============================================================
 
-def save_current_match(
+def save_match_to_database(
     item,
     index
 ):
 
     try:
 
-        # ----------------------------------------------------
-        # 실제 7M 페이지에 경기 ID가 없을 수 있으므로
-        # 안정적인 내부 ID를 생성
-        # ----------------------------------------------------
-
         schedule_id = (
-            700000000
-            + int(index)
+            700000000 + index
         )
 
         data = {
             "schedule_id": schedule_id,
-            "match_date": item.get(
-                "match_date",
-                ""
-            ),
-            "home_team": item.get(
-                "home_team",
-                ""
-            ),
-            "away_team": item.get(
-                "away_team",
-                ""
-            ),
-            "home_score": item.get(
-                "home_score"
-            ),
-            "away_score": item.get(
-                "away_score"
-            ),
-            "result": item.get(
-                "result",
-                ""
-            ),
+            "match_date": "",
+            "home_team": item[
+                "home_team"
+            ],
+            "away_team": item[
+                "away_team"
+            ],
+            "home_score": None,
+            "away_score": None,
+            "result": "",
             "source": "7M",
             "odds": [
                 {
@@ -770,46 +724,82 @@ def save_current_match(
             ],
         }
 
-        saved = database.save_match(
-            data
-        )
+        # ----------------------------------------------------
+        # 현재 database.py의 save_match 사용
+        # ----------------------------------------------------
 
-        if saved:
-            return True
+        if hasattr(
+            database,
+            "save_match"
+        ):
+
+            result = database.save_match(
+                data
+            )
+
+            return bool(result)
+
+        # ----------------------------------------------------
+        # 다른 이름을 사용하는 DB와 호환
+        # ----------------------------------------------------
+
+        if hasattr(
+            database,
+            "save_match_data"
+        ):
+
+            result = database.save_match_data(
+                data
+            )
+
+            return bool(result)
+
+        if hasattr(
+            database,
+            "insert_match"
+        ):
+
+            result = database.insert_match(
+                data
+            )
+
+            return bool(result)
+
+        if hasattr(
+            database,
+            "add_match"
+        ):
+
+            result = database.add_match(
+                data
+            )
+
+            return bool(result)
+
+        add_log(
+            "❌ database.py에 저장 함수가 없습니다."
+        )
 
         return False
 
     except Exception as e:
 
         add_log(
-            f"DB 오류: {str(e)[:150]}"
+            f"❌ DB 저장 오류: {str(e)[:150]}"
         )
 
         return False
 
 
 # ============================================================
-# 현재 경기 수집
+# 현재 경기 전체 수집
 # ============================================================
 
-def collect_current_page():
+def collect_current_matches(
+    delay=REQUEST_DELAY
+):
 
-    matches = (
-        discover_current_matches()
-    )
-
-    if not matches:
-
-        add_log(
-            "❌ 현재 7M에서 경기 데이터를 찾지 못했습니다."
-        )
-
-        return {
-            "success": 0,
-            "failed": 0,
-            "odds": 0,
-            "total": 0,
-        }
+    matches = discover_matches()
 
     total = len(matches)
 
@@ -817,9 +807,13 @@ def collect_current_page():
 
         job["total"] = total
 
-    success = 0
-    failed = 0
-    odds_count = 0
+    if total == 0:
+
+        add_log(
+            "❌ 수집 가능한 경기를 찾지 못했습니다."
+        )
+
+        return
 
     for index, item in enumerate(
         matches,
@@ -829,7 +823,7 @@ def collect_current_page():
         if not is_running():
             break
 
-        saved = save_current_match(
+        saved = save_match_to_database(
             item,
             index
         )
@@ -843,55 +837,44 @@ def collect_current_page():
 
         if saved:
 
-            success += 1
-            odds_count += 1
-
             with job_lock:
 
-                job["success"] = success
-                job["odds"] = odds_count
+                job["success"] += 1
+                job["odds"] += 1
 
             add_log(
-                f"✅ {index} | "
-                f"{item['home_team']} "
-                f"vs "
-                f"{item['away_team']} | "
-                f"{item['home_odds']} / "
-                f"{item['draw_odds']} / "
-                f"{item['away_odds']}"
+                "✅ "
+                + str(index)
+                + " | "
+                + item["home_team"]
+                + " vs "
+                + item["away_team"]
+                + " | "
+                + str(item["home_odds"])
+                + " / "
+                + str(item["draw_odds"])
+                + " / "
+                + str(item["away_odds"])
             )
 
         else:
 
-            failed += 1
-
             with job_lock:
-
-                job["failed"] = failed
+                job["failed"] += 1
 
             add_log(
-                f"❌ 저장 실패 | "
-                f"{item['home_team']} "
-                f"vs "
-                f"{item['away_team']}"
+                "❌ 저장 실패 | "
+                + item["home_team"]
+                + " vs "
+                + item["away_team"]
             )
 
-        if REQUEST_DELAY > 0:
-
-            time.sleep(
-                REQUEST_DELAY
-            )
-
-    return {
-        "success": success,
-        "failed": failed,
-        "odds": odds_count,
-        "total": total,
-    }
+        if delay > 0:
+            time.sleep(delay)
 
 
 # ============================================================
-# 범위 수집
+# ID 범위 수집
 # ============================================================
 
 def collect_range(
@@ -900,11 +883,6 @@ def collect_range(
     selected_companies=None,
     delay=REQUEST_DELAY
 ):
-
-    # --------------------------------------------------------
-    # 기존 app.py와의 호환을 위해 ID는 받지만
-    # 현재 7M 구조에서는 ID 순차 요청을 하지 않는다.
-    # --------------------------------------------------------
 
     start_id = to_int(
         start_id
@@ -936,22 +914,25 @@ def collect_range(
         job["end_time"] = ""
 
     add_log(
-        "🚀 현재 7M 1X2 경기 수집 시작"
+        "🚀 7M 수집 시작"
     )
 
     add_log(
-        f"입력 ID 범위: "
-        f"{start_id:,} ~ {end_id:,}"
+        "입력 ID: "
+        + str(start_id)
+        + " ~ "
+        + str(end_id)
     )
 
     add_log(
-        "ℹ️ 현재 7M 구조에 맞춰 "
-        "실제 경기 목록에서 수집합니다."
+        "ℹ️ 현재 7M 경기 목록을 먼저 탐색합니다."
     )
 
     try:
 
-        result = collect_current_page()
+        collect_current_matches(
+            delay=delay
+        )
 
         with job_lock:
 
@@ -961,19 +942,13 @@ def collect_range(
                 datetime.now().isoformat()
             )
 
-            if result["total"] > 0:
+            if job["success"] > 0:
 
-                if result["success"] > 0:
+                job["result"] = "수집 완료"
 
-                    job["result"] = (
-                        "수집 완료"
-                    )
+            elif job["failed"] > 0:
 
-                else:
-
-                    job["result"] = (
-                        "저장 실패"
-                    )
+                job["result"] = "저장 실패"
 
             else:
 
@@ -983,10 +958,12 @@ def collect_range(
 
         add_log(
             "🏁 수집 종료 | "
-            f"전체 {result['total']} | "
-            f"성공 {result['success']} | "
-            f"실패 {result['failed']} | "
-            f"배당 {result['odds']}"
+            "성공 "
+            + str(job["success"])
+            + " | 실패 "
+            + str(job["failed"])
+            + " | 배당 "
+            + str(job["odds"])
         )
 
     except Exception as e:
@@ -1002,14 +979,15 @@ def collect_range(
             )
 
         add_log(
-            f"🔥 수집 오류: {str(e)}"
+            "🔥 수집 오류: "
+            + str(e)
         )
 
     return get_status()
 
 
 # ============================================================
-# 백그라운드 시작
+# 백그라운드 수집
 # ============================================================
 
 def start_background_collection(
@@ -1029,9 +1007,7 @@ def start_background_collection(
         collect_range(
             start_id=start_id,
             end_id=end_id,
-            selected_companies=(
-                selected_companies
-            ),
+            selected_companies=selected_companies,
             delay=delay
         )
 
@@ -1046,7 +1022,7 @@ def start_background_collection(
 
 
 # ============================================================
-# 별칭
+# 기존 app.py 호환
 # ============================================================
 
 def start_collection(
@@ -1133,18 +1109,23 @@ def get_status_text():
         progress = get_progress()
 
         return (
-            f"수집중 "
-            f"{progress['current']:,}/"
-            f"{progress['total']:,} "
-            f"({progress['percent']:.1f}%)"
+            "수집중 "
+            + str(progress["current"])
+            + "/"
+            + str(progress["total"])
+            + " ("
+            + str(progress["percent"])
+            + "%)"
         )
 
     if status["finished"]:
 
         return (
-            f"{status['result']} | "
-            f"성공 {status['success']:,} | "
-            f"실패 {status['failed']:,}"
+            str(status["result"])
+            + " | 성공 "
+            + str(status["success"])
+            + " | 실패 "
+            + str(status["failed"])
         )
 
     return "대기"
@@ -1157,7 +1138,7 @@ def get_status_text():
 if __name__ == "__main__":
 
     print("=" * 60)
-    print("⚽ 7M 현재 1X2 수집기")
+    print("7M 축구 최종배당 수집기")
     print("=" * 60)
-    print("정상 로드")
+    print("모듈 정상 로드")
     print(BASE_URL)
